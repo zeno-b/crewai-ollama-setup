@@ -1,0 +1,39 @@
+# Development overrides
+version: '3.8'
+
+services:
+  crewai:
+    build:
+      context: .
+      dockerfile: Dockerfile.crewai
+      target: development
+    volumes:
+      - .:/app
+      - crewai_dev_data:/app/data
+      - crewai_dev_logs:/app/logs
+    environment:
+      - RELOAD=true
+      - LOG_LEVEL=DEBUG
+      - DEBUG=true
+      - ENVIRONMENT=development
+    ports:
+      - "8000:8000"
+      - "5678:5678"  # Debug port
+    command: >
+      sh -c "pip install debugpy -t /tmp && 
+             python /tmp/debugpy --listen 0.0.0.0:5678 --wait-for-client -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    profiles:
+      - dev
+
+  ollama:
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_dev_data:/root/.ollama
+    environment:
+      - OLLAMA_DEBUG=1
+
+volumes:
+  crewai_dev_data:
+  crewai_dev_logs:
+  ollama_dev_data:
