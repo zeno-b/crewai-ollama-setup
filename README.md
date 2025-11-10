@@ -9,6 +9,7 @@ A comprehensive setup for running CrewAI with Ollama as the LLM backend, featuri
 - **Task Templates**: Reusable task definitions
 - **Crew Management**: Organized crew structures
 - **Custom Tools**: Extensible tool collection for web search, file operations, code execution, and more
+- **Self-Contained Deployment**: Automated deploy/rollback script with dependency management
 - **Docker Support**: Containerized setup for easy deployment
 - **Configuration Management**: Centralized settings management
 
@@ -27,15 +28,40 @@ git clone <repository-url>
 cd crewai-ollama-setup
 ```
 
-2. Start the services:
+2. Install dependencies and start the stack with the deployment script (runs in development mode by default):
 ```bash
-docker-compose up -d
+python3 scripts/deploy.py deploy --env dev
+```
+
+   For production overrides:
+```bash
+python3 scripts/deploy.py deploy --env prod
 ```
 
 3. Verify Ollama is running:
 ```bash
 curl http://localhost:11434/api/tags
 ```
+
+4. Check service status at any time:
+```bash
+python3 scripts/deploy.py status --env dev
+```
+
+5. Roll back all services and clean up (stops containers, removes volumes/networks/data, and deletes the managed virtualenv):
+```bash
+python3 scripts/deploy.py rollback
+```
+
+   Use `--help` on any command to see additional options (e.g., `python3 scripts/deploy.py deploy --help`).
+
+### Deployment Script Highlights
+
+- Creates required directories for bind mounts (`data/`, `logs/`, `models/`, etc.)
+- Builds and starts Docker Compose services with optional `--prune` and `--force-recreate`
+- Manages Python dependencies automatically (installs into `.venv` unless `--system-python` is specified)
+- Provides `check` and `status` utilities for quick diagnostics
+- Writes activity logs to `deploy.log` and removes runtime artifacts on rollback
 
 ### Configuration
 
