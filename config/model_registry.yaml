@@ -1,0 +1,6 @@
+default_model: llama2:latest
+history:
+  - llama2:latest
+models:
+  llama2:
+    versions: []

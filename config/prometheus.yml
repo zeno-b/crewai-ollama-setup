@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: crewai-api
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - crewai:9090
+
+  - job_name: ollama
+    static_configs:
+      - targets:
+          - ollama:11434
