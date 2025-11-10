@@ -1,6 +1,6 @@
 # CrewAI + Ollama Setup
 
-A comprehensive setup for running CrewAI with Ollama as the LLM backend, featuring custom agents, tasks, crews, and tools.
+A comprehensive setup for running CrewAI with Ollama as the LLM backend, featuring custom agents, tasks, crews, tools, and a self-contained deployment workflow.
 
 ## Features
 
@@ -27,15 +27,27 @@ git clone <repository-url>
 cd crewai-ollama-setup
 ```
 
-2. Start the services:
+2. Deploy the stack with the helper script (installs dependencies, scaffolds configs, and orchestrates Docker):
 ```bash
-docker-compose up -d
+python scripts/deploy.py deploy
 ```
 
-3. Verify Ollama is running:
+3. Check service status:
+```bash
+python scripts/deploy.py status
+```
+
+4. Verify Ollama is running (optional):
 ```bash
 curl http://localhost:11434/api/tags
 ```
+
+### Deployment Script
+
+The helper script supports the full lifecycle:
+- Run `python scripts/deploy.py deploy` to install dependencies, scaffold monitoring configs, and start containers (`--prod` also loads `docker-compose.prod.yml`)
+- Run `python scripts/deploy.py status` to view Docker Compose service status at any time
+- Run `python scripts/deploy.py rollback --yes` for a confirmed full teardown that stops services, removes Docker resources, and deletes runtime data
 
 ### Configuration
 
