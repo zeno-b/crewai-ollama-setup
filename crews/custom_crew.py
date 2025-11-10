@@ -7,9 +7,9 @@ import json
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
-from ..agents.custom_agent import CustomAgent, AgentFactory
-from ..tasks.custom_task import CustomTask, TaskFactory
-from ..config.settings import settings
+from agents.custom_agent import CustomAgent, AgentFactory
+from tasks.custom_task import CustomTask, TaskFactory
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 

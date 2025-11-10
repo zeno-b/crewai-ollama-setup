@@ -77,6 +77,12 @@ class CrewAISetup:
                 "cache_size": "1g",
                 "workers": 4,
                 "timeout": 300
+            },
+            "bootstrap": {
+                "auto": True,
+                "non_interactive": False,
+                "install_ollama_cli": False,
+                "ollama_model": "llama2:7b"
             }
         }
     
@@ -84,56 +90,95 @@ class CrewAISetup:
         """Check if system meets requirements"""
         logger.info("Checking system requirements...")
         
-        # Check Python version
+        missing = []
+        
         if sys.version_info < (3, 8):
-            logger.error("Python 3.8+ required")
-            return False
-            
+            missing.append("Python>=3.8")
+        
         # Check Docker
+        docker_ok = False
         try:
-            result = subprocess.run(['docker', '--version'], 
-                                  capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.error("Docker not found")
-                return False
-        except FileNotFoundError:
-            logger.error("Docker not installed")
-            return False
-            
-        # Check Docker Compose
-        try:
-            result = subprocess.run(['docker-compose', '--version'], 
-                                  capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.error("Docker Compose not found")
-                return False
-        except FileNotFoundError:
-            logger.error("Docker Compose not installed")
-            return False
-            
-        # Check available memory
-        if platform.system() == "Windows":
+            subprocess.run(['docker', '--version'], capture_output=True, text=True, check=True)
+            docker_ok = True
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            missing.append("Docker Engine")
+        
+        # Check Docker Compose (plugin or legacy)
+        compose_ok = False
+        if docker_ok:
             try:
-                result = subprocess.run(['wmic', 'OS', 'get', 'TotalVisibleMemorySize'], 
-                                      capture_output=True, text=True)
+                subprocess.run(['docker', 'compose', 'version'], capture_output=True, text=True, check=True)
+                compose_ok = True
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                pass
+        if not compose_ok:
+            try:
+                subprocess.run(['docker-compose', '--version'], capture_output=True, text=True, check=True)
+                compose_ok = True
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                pass
+        if not compose_ok:
+            missing.append("Docker Compose")
+        
+        # Check available memory (best effort)
+        try:
+            if platform.system() == "Windows":
+                result = subprocess.run(
+                    ['wmic', 'OS', 'get', 'TotalVisibleMemorySize'],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
                 memory_kb = int(result.stdout.split()[1])
                 memory_gb = memory_kb / (1024 * 1024)
-                if memory_gb < 8:
-                    logger.warning(f"Low memory detected: {memory_gb:.1f}GB")
-            except:
-                pass
-        else:
-            try:
-                result = subprocess.run(['free', '-g'], 
-                                      capture_output=True, text=True)
-                memory_gb = int(result.stdout.split()[7])
-                if memory_gb < 8:
-                    logger.warning(f"Low memory detected: {memory_gb}GB")
-            except:
-                pass
-                
-        logger.info("System requirements check completed")
+            else:
+                result = subprocess.run(['awk', '/MemTotal/ {print $2}', '/proc/meminfo'],
+                                        capture_output=True, text=True, check=True)
+                memory_kb = int(result.stdout.strip())
+                memory_gb = memory_kb / (1024 * 1024)
+            if memory_gb < 8:
+                logger.warning("Detected less than 8GB RAM (%.1fGB). Performance may be degraded.", memory_gb)
+        except Exception:
+            logger.debug("Unable to determine system memory capacity.", exc_info=True)
+        
+        if missing:
+            logger.error("Missing prerequisites: %s", ", ".join(missing))
+            return False
+        
+        logger.info("System requirements check completed successfully.")
         return True
+    
+    def ensure_prerequisites(
+        self,
+        non_interactive: bool = False,
+        install_ollama_cli: bool = False,
+        ollama_model: Optional[str] = None
+    ) -> bool:
+        """Run the bootstrap script to install prerequisites."""
+        script_path = self.project_root / "scripts" / "bootstrap.sh"
+        if not script_path.exists():
+            logger.error("Bootstrap script not found at %s", script_path)
+            return False
+        
+        cmd = ["bash", str(script_path)]
+        if non_interactive:
+            cmd.append("--non-interactive")
+        if install_ollama_cli:
+            cmd.append("--with-ollama-cli")
+        if ollama_model:
+            cmd.extend(["--ollama-model", ollama_model])
+        
+        try:
+            logger.info("Running bootstrap script to ensure prerequisites...")
+            subprocess.run(cmd, check=True)
+            logger.info("Bootstrap script completed successfully.")
+            return True
+        except subprocess.CalledProcessError as exc:
+            logger.error("Bootstrap script failed with exit code %s", exc.returncode)
+        except FileNotFoundError as exc:
+            logger.error("Failed to execute bootstrap script: %s", exc)
+        
+        return False
     
     def create_directory_structure(self):
         """Create necessary directory structure"""
@@ -149,11 +194,19 @@ class CrewAISetup:
         
         for directory in directories:
             dir_path = self.project_root / directory
-            dir_path.mkdir(exist_ok=True)
-            logger.info(f"Created directory: {directory}")
+            if not dir_path.exists():
+                dir_path.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created directory: {directory}")
+            else:
+                logger.debug(f"Directory already exists: {directory}")
     
     def create_docker_compose(self):
         """Create Docker Compose configuration"""
+        compose_file = self.project_root / "docker-compose.yml"
+        if compose_file.exists():
+            logger.debug("docker-compose.yml already exists; skipping auto-generation.")
+            return
+        
         compose_config = f"""
 version: '{self.config["docker"]["compose_version"]}'
 
@@ -216,12 +269,17 @@ services:
     user: "{self.config['security']['user_id']}:{self.config['security']['group_id']}"
 """
         
-        with open(self.project_root / "docker-compose.yml", "w") as f:
+        with open(compose_file, "w") as f:
             f.write(compose_config)
         logger.info("Docker Compose configuration created")
     
     def create_dockerfile_crewai(self):
         """Create Dockerfile for CrewAI service"""
+        dockerfile_path = self.project_root / "Dockerfile.crewai"
+        if dockerfile_path.exists():
+            logger.debug("Dockerfile.crewai already exists; skipping auto-generation.")
+            return
+        
         dockerfile_content = f"""
 FROM python:3.11-slim
 
@@ -263,12 +321,17 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \\
 CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 """
         
-        with open(self.project_root / "Dockerfile.crewai", "w") as f:
+        with open(dockerfile_path, "w") as f:
             f.write(dockerfile_content)
         logger.info("CrewAI Dockerfile created")
     
     def create_requirements(self):
         """Create requirements.txt for CrewAI"""
+        requirements_path = self.project_root / "requirements.txt"
+        if requirements_path.exists():
+            logger.debug("requirements.txt already exists; skipping auto-generation.")
+            return
+        
         requirements = [
             "crewai>=0.30.0",
             "crewai-tools>=0.4.0",
@@ -288,12 +351,17 @@ CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000
             "alembic>=1.12.0"
         ]
         
-        with open(self.project_root / "requirements.txt", "w") as f:
+        with open(requirements_path, "w") as f:
             f.write("\n".join(requirements))
         logger.info("Requirements file created")
     
     def create_environment_template(self):
         """Create environment template file"""
+        env_template_path = self.project_root / ".env.template"
+        if env_template_path.exists():
+            logger.debug(".env.template already exists; skipping auto-generation.")
+            return
+        
         env_template = """# Ollama Configuration
 OLLAMA_BASE_URL=http://ollama:11434
 OLLAMA_MODEL=llama2:7b
@@ -315,12 +383,17 @@ ENABLE_METRICS=true
 METRICS_PORT=9090
 """
         
-        with open(self.project_root / ".env.template", "w") as f:
+        with open(env_template_path, "w") as f:
             f.write(env_template)
         logger.info("Environment template created")
     
     def create_main_app(self):
         """Create main FastAPI application"""
+        main_path = self.project_root / "main.py"
+        if main_path.exists():
+            logger.debug("main.py already exists; skipping auto-generation.")
+            return
+        
         main_app = '''from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -454,16 +527,27 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
 '''
         
-        with open(self.project_root / "main.py", "w") as f:
+        with open(main_path, "w") as f:
             f.write(main_app)
         logger.info("Main application created")
     
     def run_setup(self):
         """Execute the complete setup process"""
         logger.info("Starting CrewAI and Ollama setup...")
+        bootstrap_cfg = self.config.get("bootstrap", {})
+        prerequisites_ok = self.check_system_requirements()
         
-        if not self.check_system_requirements():
-            logger.error("System requirements not met")
+        if not prerequisites_ok and bootstrap_cfg.get("auto", True):
+            logger.warning("System requirements missing; attempting automatic prerequisite installation.")
+            if self.ensure_prerequisites(
+                non_interactive=bootstrap_cfg.get("non_interactive", False),
+                install_ollama_cli=bootstrap_cfg.get("install_ollama_cli", False),
+                ollama_model=bootstrap_cfg.get("ollama_model")
+            ):
+                prerequisites_ok = self.check_system_requirements()
+        
+        if not prerequisites_ok:
+            logger.error("System requirements not met. Install prerequisites and rerun the setup.")
             return False
             
         try:
@@ -495,9 +579,30 @@ if __name__ == "__main__":
 def main():
     parser = argparse.ArgumentParser(description="CrewAI and Ollama Setup")
     parser.add_argument("--config", help="Configuration file path")
+    parser.add_argument("--prereqs", action="store_true", help="Run prerequisite bootstrap and exit")
+    parser.add_argument("--non-interactive", action="store_true", help="Run bootstrap without prompts")
+    parser.add_argument("--with-ollama-cli", action="store_true", help="Install Ollama CLI on the host")
+    parser.add_argument("--ollama-model", help="Model to pre-pull during bootstrap")
     args = parser.parse_args()
     
     setup = CrewAISetup(args.config) if args.config else CrewAISetup()
+    
+    bootstrap_cfg = setup.config.setdefault("bootstrap", {})
+    if args.non_interactive:
+        bootstrap_cfg["non_interactive"] = True
+    if args.with_ollama_cli:
+        bootstrap_cfg["install_ollama_cli"] = True
+    if args.ollama_model:
+        bootstrap_cfg["ollama_model"] = args.ollama_model
+    
+    if args.prereqs:
+        success = setup.ensure_prerequisites(
+            non_interactive=bootstrap_cfg.get("non_interactive", False),
+            install_ollama_cli=bootstrap_cfg.get("install_ollama_cli", False),
+            ollama_model=bootstrap_cfg.get("ollama_model")
+        )
+        sys.exit(0 if success else 1)
+    
     success = setup.run_setup()
     
     sys.exit(0 if success else 1)
