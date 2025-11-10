@@ -1,506 +1,149 @@
-#!/usr/bin/env python3
-"""
-CrewAI and Ollama Setup Script
-Comprehensive setup with containerization, security, and performance optimization
-"""
+#!/usr/bin/env python3  # Specify the interpreter used to execute this script
 
-import os
-import sys
-import subprocess
-import json
-import logging
-import platform
-import shutil
-from pathlib import Path
-from typing import Dict, List, Optional
-import argparse
+import argparse  # Import argparse to parse command line arguments
+import json  # Import json to serialize and persist configuration details
+import logging  # Import logging to emit structured diagnostic information
+import os  # Import os to interact with environment variables and the filesystem
+from pathlib import Path  # Import Path to handle filesystem paths elegantly
+from typing import Dict, List  # Import typing helpers to annotate configuration structures
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('setup.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
+logging.basicConfig(  # Configure the global logging system used by the script
+    level=logging.INFO,  # Emit informational messages by default
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # Use a timestamped log format
+)  # Close the logging configuration call
+logger = logging.getLogger(__name__)  # Acquire a module-level logger for this script
 
-class CrewAISetup:
-    """Main setup class for CrewAI and Ollama infrastructure"""
-    
-    def __init__(self, config_path: str = "config/setup_config.json"):
-        self.config_path = Path(config_path)
-        self.project_root = Path(__file__).parent
-        self.config = self.load_config()
-        
-    def load_config(self) -> Dict:
-        """Load configuration from JSON file"""
-        try:
-            if self.config_path.exists():
-                with open(self.config_path, 'r') as f:
-                    return json.load(f)
-            else:
-                logger.warning("Config file not found, using defaults")
-                return self.get_default_config()
-        except Exception as e:
-            logger.error(f"Error loading config: {e}")
-            return self.get_default_config()
-    
-    def get_default_config(self) -> Dict:
-        """Default configuration for setup"""
-        return {
-            "docker": {
-                "compose_version": "3.8",
-                "network_name": "crewai-network",
-                "subnet": "172.20.0.0/16"
-            },
-            "ollama": {
-                "image": "ollama/ollama:latest",
-                "port": 11434,
-                "memory_limit": "4g",
-                "cpu_limit": "2.0"
-            },
-            "crewai": {
-                "image": "crewai:latest",
-                "port": 8000,
-                "memory_limit": "2g",
-                "cpu_limit": "1.0"
-            },
-            "security": {
-                "enable_firewall": True,
-                "enable_ssl": False,
-                "user_id": 1000,
-                "group_id": 1000
-            },
-            "performance": {
-                "cache_size": "1g",
-                "workers": 4,
-                "timeout": 300
-            }
-        }
-    
-    def check_system_requirements(self) -> bool:
-        """Check if system meets requirements"""
-        logger.info("Checking system requirements...")
-        
-        # Check Python version
-        if sys.version_info < (3, 8):
-            logger.error("Python 3.8+ required")
-            return False
-            
-        # Check Docker
-        try:
-            result = subprocess.run(['docker', '--version'], 
-                                  capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.error("Docker not found")
-                return False
-        except FileNotFoundError:
-            logger.error("Docker not installed")
-            return False
-            
-        # Check Docker Compose
-        try:
-            result = subprocess.run(['docker-compose', '--version'], 
-                                  capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.error("Docker Compose not found")
-                return False
-        except FileNotFoundError:
-            logger.error("Docker Compose not installed")
-            return False
-            
-        # Check available memory
-        if platform.system() == "Windows":
-            try:
-                result = subprocess.run(['wmic', 'OS', 'get', 'TotalVisibleMemorySize'], 
-                                      capture_output=True, text=True)
-                memory_kb = int(result.stdout.split()[1])
-                memory_gb = memory_kb / (1024 * 1024)
-                if memory_gb < 8:
-                    logger.warning(f"Low memory detected: {memory_gb:.1f}GB")
-            except:
-                pass
-        else:
-            try:
-                result = subprocess.run(['free', '-g'], 
-                                      capture_output=True, text=True)
-                memory_gb = int(result.stdout.split()[7])
-                if memory_gb < 8:
-                    logger.warning(f"Low memory detected: {memory_gb}GB")
-            except:
-                pass
-                
-        logger.info("System requirements check completed")
-        return True
-    
-    def create_directory_structure(self):
-        """Create necessary directory structure"""
-        directories = [
-            "config",
-            "data",
-            "logs",
-            "models",
-            "agents",
-            "scripts",
-            "backups"
-        ]
-        
-        for directory in directories:
-            dir_path = self.project_root / directory
-            dir_path.mkdir(exist_ok=True)
-            logger.info(f"Created directory: {directory}")
-    
-    def create_docker_compose(self):
-        """Create Docker Compose configuration"""
-        compose_config = f"""
-version: '{self.config["docker"]["compose_version"]}'
 
-networks:
-  {self.config["docker"]["network_name"]}:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: {self.config["docker"]["subnet"]}
+DEFAULT_DIRECTORIES: List[str] = [  # Declare the directories that should exist for a healthy project layout
+    "agents",  # Store application-specific agent definitions
+    "config",  # Store configuration modules and artifacts
+    "data",  # Store persistent data files
+    "logs",  # Store application log files
+    "models",  # Store model artifacts such as Ollama downloads
+    "tasks",  # Store task definitions
+    "tools"  # Store custom tool implementations
+]  # Close the list of default directories
 
-services:
-  ollama:
-    image: {self.config["ollama"]["image"]}
-    container_name: ollama-service
-    ports:
-      - "{self.config['ollama']['port']}:11434"
-    volumes:
-      - ./data/ollama:/root/.ollama
-      - ./models:/models
-    environment:
-      - OLLAMA_HOST=0.0.0.0
-    networks:
-      - {self.config["docker"]["network_name"]}
-    deploy:
-      resources:
-        limits:
-          memory: {self.config["ollama"]["memory_limit"]}
-          cpus: {self.config["ollama"]["cpu_limit"]}
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+REQUIREMENTS: List[str] = [  # Declare the Python dependencies required by the project
+    "crewai>=0.30.0",  # Provide the core CrewAI framework
+    "crewai-tools>=0.4.0",  # Provide additional CrewAI tool integrations
+    "fastapi>=0.109.0",  # Provide the FastAPI web framework
+    "uvicorn[standard]>=0.27.0",  # Provide the Uvicorn ASGI server with standard extras
+    "pydantic>=2.5.0",  # Provide Pydantic for data validation
+    "redis>=5.0.0",  # Provide the Redis client for caching and persistence
+    "requests>=2.31.0",  # Provide an HTTP client for integrations
+    "prometheus-client>=0.19.0"  # Provide Prometheus instrumentation
+]  # Close the requirements list
 
-  crewai:
-    build:
-      context: .
-      dockerfile: Dockerfile.crewai
-    container_name: crewai-service
-    ports:
-      - "{self.config['crewai']['port']}:8000"
-    volumes:
-      - ./agents:/app/agents
-      - ./config:/app/config
-      - ./logs:/app/logs
-    environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-    networks:
-      - {self.config["docker"]["network_name"]}
-    depends_on:
-      ollama:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: {self.config["crewai"]["memory_limit"]}
-          cpus: {self.config["crewai"]["cpu_limit"]}
-    restart: unless-stopped
-    user: "{self.config['security']['user_id']}:{self.config['security']['group_id']}"
-"""
-        
-        with open(self.project_root / "docker-compose.yml", "w") as f:
-            f.write(compose_config)
-        logger.info("Docker Compose configuration created")
-    
-    def create_dockerfile_crewai(self):
-        """Create Dockerfile for CrewAI service"""
-        dockerfile_content = f"""
-FROM python:3.11-slim
 
-# Security: Create non-root user
-RUN groupadd -g {self.config['security']['group_id']} crewai && \\
-    useradd -u {self.config['security']['user_id']} -g crewai -m crewai
+class CrewAISetup:  # Define a helper class that encapsulates setup operations
+    def __init__(self, project_root: Path, config_path: Path) -> None:  # Initialize the setup helper with paths
+        self.project_root = project_root  # Store the project root directory for later operations
+        self.config_path = config_path  # Store the configuration file path for persistence
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \\
-    curl \\
-    git \\
-    && rm -rf /var/lib/apt/lists/*
+    def ensure_directories(self) -> None:  # Create required directories if they do not exist
+        for directory in DEFAULT_DIRECTORIES:  # Iterate over each required directory name
+            target = self.project_root / directory  # Construct the absolute path for the directory
+            target.mkdir(parents=True, exist_ok=True)  # Create the directory hierarchy when missing
+            logger.info("Ensured directory exists: %s", target)  # Log the directory creation or verification
 
-# Set working directory
-WORKDIR /app
+    def write_requirements(self) -> None:  # Persist the Python dependency list to requirements.txt
+        requirements_path = self.project_root / "requirements.txt"  # Determine the path for the requirements file
+        requirements_path.write_text("\n".join(REQUIREMENTS), encoding="utf-8")  # Write the dependencies as newline-separated text
+        logger.info("Wrote dependency list to %s", requirements_path)  # Log that the requirements file was refreshed
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+    def write_env_template(self) -> None:  # Persist an environment variable template for operators
+        env_template_path = self.project_root / ".env.template"  # Determine the path for the template file
+        template_contents = (  # Build the template contents as a single string
+            "# CrewAI Environment Template\n"
+            "API_BEARER_TOKEN=replace-with-secure-token\n"
+            "REDIS_URL=redis://localhost:6379/0\n"
+            "OLLAMA_BASE_URL=http://localhost:11434\n"
+            "OLLAMA_MODEL=llama2:7b\n"
+            "RATE_LIMIT_PER_MINUTE=60\n"
+        )  # Close the template string
+        env_template_path.write_text(template_contents, encoding="utf-8")  # Write the template to disk
+        logger.info("Wrote environment template to %s", env_template_path)  # Log that the template was updated
 
-# Copy application code
-COPY . .
+    def write_docker_compose(self) -> None:  # Persist a minimal Docker Compose configuration for local deployment
+        docker_compose_path = self.project_root / "docker-compose.yml"  # Determine the path for the compose file
+        compose_contents = (  # Build the docker-compose configuration as a string
+            "version: '3.9'\n"
+            "services:\n"
+            "  redis:\n"
+            "    image: redis:7-alpine\n"
+            "    restart: unless-stopped\n"
+            "    ports:\n"
+            "      - \"6379:6379\"\n"
+            "  crewai:\n"
+            "    build:\n"
+            "      context: .\n"
+            "      dockerfile: Dockerfile.crewai\n"
+            "    environment:\n"
+            "      - REDIS_URL=redis://redis:6379/0\n"
+            "      - OLLAMA_BASE_URL=http://ollama:11434\n"
+            "    ports:\n"
+            "      - \"8000:8000\"\n"
+            "    depends_on:\n"
+            "      - redis\n"
+            "  ollama:\n"
+            "    image: ollama/ollama:latest\n"
+            "    ports:\n"
+            "      - \"11434:11434\"\n"
+        )  # Close the docker-compose configuration
+        docker_compose_path.write_text(compose_contents, encoding="utf-8")  # Write the compose file to disk
+        logger.info("Wrote docker-compose definition to %s", docker_compose_path)  # Log that the compose file was updated
 
-# Create necessary directories
-RUN mkdir -p /app/logs /app/agents && \\
-    chown -R crewai:crewai /app
+    def write_dockerfile(self) -> None:  # Persist a Dockerfile tailored for the CrewAI service
+        dockerfile_path = self.project_root / "Dockerfile.crewai"  # Determine the path for the Dockerfile
+        dockerfile_contents = (  # Build the Dockerfile as a string
+            "FROM python:3.11-slim\n"
+            "WORKDIR /app\n"
+            "COPY requirements.txt .\n"
+            "RUN pip install --no-cache-dir -r requirements.txt\n"
+            "COPY . .\n"
+            "EXPOSE 8000\n"
+            "CMD [\"python\", \"main.py\"]\n"
+        )  # Close the Dockerfile string
+        dockerfile_path.write_text(dockerfile_contents, encoding="utf-8")  # Write the Dockerfile to disk
+        logger.info("Wrote Dockerfile to %s", dockerfile_path)  # Log that the Dockerfile was refreshed
 
-# Switch to non-root user
-USER crewai
+    def persist_config(self, config: Dict[str, str]) -> None:  # Persist setup metadata for future reference
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure the configuration directory exists
+        self.config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")  # Serialize the configuration to JSON
+        logger.info("Persisted setup metadata to %s", self.config_path)  # Log that the configuration file was written
 
-# Expose port
-EXPOSE 8000
+    def run(self) -> None:  # Execute the full setup routine using helper methods
+        logger.info("Starting CrewAI project initialization")  # Log the beginning of the setup process
+        self.ensure_directories()  # Create required project directories
+        self.write_requirements()  # Generate the requirements file
+        self.write_env_template()  # Generate the environment template
+        self.write_docker_compose()  # Generate the docker-compose file
+        self.write_dockerfile()  # Generate the Dockerfile
+        setup_metadata = {  # Prepare metadata describing the generated artifacts
+            "requirements": "requirements.txt",  # Record the location of the requirements file
+            "env_template": ".env.template",  # Record the location of the environment template
+            "docker_compose": "docker-compose.yml",  # Record the location of the docker-compose file
+            "dockerfile": "Dockerfile.crewai"  # Record the location of the Dockerfile
+        }  # Close the metadata dictionary
+        self.persist_config(setup_metadata)  # Persist the metadata for future reference
+        logger.info("CrewAI project initialization completed successfully")  # Log the successful completion of setup
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \\
-    CMD curl -f http://localhost:8000/health || exit 1
 
-# Start command
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
-"""
-        
-        with open(self.project_root / "Dockerfile.crewai", "w") as f:
-            f.write(dockerfile_content)
-        logger.info("CrewAI Dockerfile created")
-    
-    def create_requirements(self):
-        """Create requirements.txt for CrewAI"""
-        requirements = [
-            "crewai>=0.30.0",
-            "crewai-tools>=0.4.0",
-            "langchain>=0.1.0",
-            "langchain-community>=0.0.10",
-            "fastapi>=0.104.0",
-            "uvicorn[standard]>=0.24.0",
-            "pydantic>=2.5.0",
-            "python-dotenv>=1.0.0",
-            "requests>=2.31.0",
-            "aiohttp>=3.9.0",
-            "asyncio>=3.4.3",
-            "psutil>=5.9.0",
-            "cryptography>=41.0.0",
-            "redis>=5.0.0",
-            "sqlalchemy>=2.0.0",
-            "alembic>=1.12.0"
-        ]
-        
-        with open(self.project_root / "requirements.txt", "w") as f:
-            f.write("\n".join(requirements))
-        logger.info("Requirements file created")
-    
-    def create_environment_template(self):
-        """Create environment template file"""
-        env_template = """# Ollama Configuration
-OLLAMA_BASE_URL=http://ollama:11434
-OLLAMA_MODEL=llama2:7b
+def parse_arguments() -> argparse.Namespace:  # Parse command line arguments provided to the script
+    parser = argparse.ArgumentParser(description="Initialize CrewAI project scaffolding")  # Create an argument parser with descriptive help text
+    parser.add_argument("--config", default="config/setup.json", help="Path to persist setup metadata")  # Allow overriding the config output path
+    parser.add_argument("--root", default=".", help="Project root directory")  # Allow overriding the project root directory
+    return parser.parse_args()  # Parse and return the supplied arguments
 
-# CrewAI Configuration
-CREWAI_PORT=8000
-CREWAI_LOG_LEVEL=INFO
 
-# Security
-SECRET_KEY=your-secret-key-here
-JWT_SECRET=your-jwt-secret-here
+def main() -> None:  # Entrypoint that orchestrates argument parsing and setup execution
+    arguments = parse_arguments()  # Parse command line arguments
+    project_root = Path(arguments.root).resolve()  # Resolve the project root into an absolute path
+    config_path = project_root / arguments.config  # Determine the absolute path for the configuration file
+    setup = CrewAISetup(project_root=project_root, config_path=config_path)  # Instantiate the setup helper with resolved paths
+    setup.run()  # Execute the setup routine
 
-# Database
-DATABASE_URL=sqlite:///./data/crewai.db
-REDIS_URL=redis://localhost:6379
 
-# Monitoring
-ENABLE_METRICS=true
-METRICS_PORT=9090
-"""
-        
-        with open(self.project_root / ".env.template", "w") as f:
-            f.write(env_template)
-        logger.info("Environment template created")
-    
-    def create_main_app(self):
-        """Create main FastAPI application"""
-        main_app = '''from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import logging
-import os
-from dotenv import load_dotenv
-from crewai import Agent, Task, Crew
-from pydantic import BaseModel
-from typing import List, Dict, Any
-import uvicorn
-
-load_dotenv()
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/crewai.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-app = FastAPI(
-    title="CrewAI Service",
-    description="CrewAI and Ollama Integration Service",
-    version="1.0.0"
-)
-
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-security = HTTPBearer()
-
-class AgentConfig(BaseModel):
-    name: str
-    role: str
-    goal: str
-    backstory: str
-    tools: List[str] = []
-
-class TaskConfig(BaseModel):
-    description: str
-    expected_output: str
-    agent: str
-
-class CrewConfig(BaseModel):
-    agents: List[AgentConfig]
-    tasks: List[TaskConfig]
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "service": "crewai"}
-
-@app.post("/create_agent")
-async def create_agent(agent_config: AgentConfig):
-    """Create a new agent"""
-    try:
-        agent = Agent(
-            name=agent_config.name,
-            role=agent_config.role,
-            goal=agent_config.goal,
-            backstory=agent_config.backstory,
-            verbose=True
-        )
-        return {"status": "success", "agent": agent_config.name}
-    except Exception as e:
-        logger.error(f"Error creating agent: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/run_crew")
-async def run_crew(crew_config: CrewConfig):
-    """Run a crew with given agents and tasks"""
-    try:
-        agents = {}
-        for agent_config in crew_config.agents:
-            agents[agent_config.name] = Agent(
-                name=agent_config.name,
-                role=agent_config.role,
-                goal=agent_config.goal,
-                backstory=agent_config.backstory,
-                verbose=True
-            )
-        
-        tasks = []
-        for task_config in crew_config.tasks:
-            agent = agents.get(task_config.agent)
-            if not agent:
-                raise HTTPException(status_code=400, detail=f"Agent {task_config.agent} not found")
-            
-            task = Task(
-                description=task_config.description,
-                expected_output=task_config.expected_output,
-                agent=agent
-            )
-            tasks.append(task)
-        
-        crew = Crew(
-            agents=list(agents.values()),
-            tasks=tasks,
-            verbose=True
-        )
-        
-        result = crew.kickoff()
-        return {"status": "success", "result": str(result)}
-        
-    except Exception as e:
-        logger.error(f"Error running crew: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/models")
-async def list_models():
-    """List available Ollama models"""
-    import requests
-    try:
-        response = requests.get(f"{os.getenv('OLLAMA_BASE_URL', 'http://ollama:11434')}/api/tags")
-        return response.json()
-    except Exception as e:
-        logger.error(f"Error listing models: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-'''
-        
-        with open(self.project_root / "main.py", "w") as f:
-            f.write(main_app)
-        logger.info("Main application created")
-    
-    def run_setup(self):
-        """Execute the complete setup process"""
-        logger.info("Starting CrewAI and Ollama setup...")
-        
-        if not self.check_system_requirements():
-            logger.error("System requirements not met")
-            return False
-            
-        try:
-            self.create_directory_structure()
-            self.create_docker_compose()
-            self.create_dockerfile_crewai()
-            self.create_requirements()
-            self.create_environment_template()
-            self.create_main_app()
-            
-            # Save configuration
-            with open(self.config_path, 'w') as f:
-                json.dump(self.config, f, indent=2)
-            
-            logger.info("Setup completed successfully!")
-            logger.info("Next steps:")
-            logger.info("1. Copy .env.template to .env and configure")
-            logger.info("2. Run: docker-compose up -d")
-            logger.info("3. Access services:")
-            logger.info("   - Ollama: http://localhost:11434")
-            logger.info("   - CrewAI: http://localhost:8000")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Setup failed: {e}")
-            return False
-
-def main():
-    parser = argparse.ArgumentParser(description="CrewAI and Ollama Setup")
-    parser.add_argument("--config", help="Configuration file path")
-    args = parser.parse_args()
-    
-    setup = CrewAISetup(args.config) if args.config else CrewAISetup()
-    success = setup.run_setup()
-    
-    sys.exit(0 if success else 1)
-
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__":  # Execute the script only when run directly
+    main()  # Invoke the main entrypoint to perform setup
