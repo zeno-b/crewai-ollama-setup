@@ -4,22 +4,92 @@ A comprehensive setup for running CrewAI with Ollama as the LLM backend, featuri
 
 ## Features
 
-- **Ollama Integration**: Seamless integration with Ollama for local LLM inference
-- **Custom Agents**: Pre-configured agents for various tasks
-- **Task Templates**: Reusable task definitions
-- **Crew Management**: Organized crew structures
-- **Custom Tools**: Extensible tool collection for web search, file operations, code execution, and more
-- **Docker Support**: Containerized setup for easy deployment
-- **Configuration Management**: Centralized settings management
+- **Self-Contained Deployment**: Cross-platform `scripts/deploy.py` bootstraps a secure virtual environment, dependencies, and optional managed Ollama binary.
+- **Crew Control CLI**: `crewctl` automates agent scaffolding, model pulls/switches, pre-training into LRM snapshots, and rollbacks.
+- **Ollama Integration**: Seamless integration with Ollama for local LLM inference.
+- **Custom Agents & Tasks**: Templates and registry tracking for repeatable automation workflows.
+- **Model Versioning**: LRM archive generation enables travel between model versions with a single command.
+- **Docker Support**: Containerized setup for easy deployment (optional).
+- **Configuration Management**: Centralized settings management.
 
-## Quick Start
+## Self-Contained Deployment (Recommended)
 
-### Prerequisites
+### 1. Prerequisites
 
-- Docker and Docker Compose
-- Ollama installed and running locally
+- Python ≥ 3.10
+- Internet access for dependency/model downloads
+- Verified checksums for the Ollama release you plan to manage (see `deployment/ollama_checksums.json`)
 
-### Installation
+### 2. Configure
+
+1. Review `deployment/config.yml` to adjust:
+   - Virtual environment path
+   - Ollama install strategy (`system`, `managed`, or `skip`)
+   - CLI templates and registries
+2. If using `managed` Ollama installs, populate SHA-256 digests in `deployment/ollama_checksums.json`. The deploy script refuses to proceed with placeholder values, ensuring tamper detection.
+
+### 3. Deploy
+
+```bash
+python scripts/deploy.py
+```
+
+Key options:
+
+- `--recreate-venv` – rebuild the virtualenv from scratch
+- `--skip-install` – skip Python dependency installation
+- `--skip-ollama` – bypass Ollama setup (useful when relying on an external installation)
+
+### 4. Activate the Toolkit
+
+```bash
+# macOS/Linux
+source .venv/bin/activate
+
+# Windows (PowerShell)
+.venv\Scripts\activate
+```
+
+The deploy script also creates a convenience launcher inside the virtualenv:
+
+- macOS/Linux: `.venv/bin/crewctl`
+- Windows: `.venv\Scripts\crewctl.cmd`
+
+### 5. Use the CLI
+
+```bash
+# list registered agents
+crewctl agents list
+
+# scaffold a new agent file from the template
+crewctl agents create "Research Analyst" --role "Research Analyst" --goal "Synthesize reports"
+
+# inspect available models
+crewctl models list
+
+# pull or switch models
+crewctl models pull llama3
+crewctl models switch llama3
+
+# pre-train a custom model (creates an LRM archive you can roll back to)
+crewctl models pretrain custom-lrm --base-model llama3 --notes "Finance tuning"
+```
+
+Snapshots generated via `crewctl models pretrain` are stored under `models/lrms/` and logged in `config/model_registry.yaml`. Roll back at any point:
+
+```bash
+crewctl models rollback --model custom-lrm
+```
+
+### 6. Environment Files
+
+The script seeds `config/agent_registry.yaml` and `config/model_registry.yaml` on first run and tightens permissions for sensitive metadata.
+
+---
+
+## Docker-Based Setup (Optional)
+
+The legacy Docker workflow remains available if you prefer containers.
 
 1. Clone the repository:
 ```bash

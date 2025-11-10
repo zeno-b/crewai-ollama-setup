@@ -1,0 +1,40 @@
+python:
+  min_version: "3.10"
+  venv_path: ".venv"
+  requirements_file: "requirements.txt"
+  pip_flags:
+    - "--upgrade"
+    - "--no-cache-dir"
+    - "--disable-pip-version-check"
+  ensure_pip: true
+
+ollama:
+  install_strategy: "system"  # options: system | managed | skip
+  version: "0.3.14"
+  listen_host: "127.0.0.1"
+  listen_port: 11434
+  binary_directory: "runtime/ollama"
+  artifacts_directory: "deployment/artifacts"
+  managed_binary_name: "ollama"
+  verify_checksums: true
+  default_models:
+    - "llama3"
+    - "mistral"
+
+cli:
+  entrypoint_name: "crewctl"
+  agent_template: "deployment/templates/agent.py.j2"
+  modelfile_template: "deployment/templates/modelfile.j2"
+  model_registry: "config/model_registry.yaml"
+  agent_registry: "config/agent_registry.yaml"
+  lrm_directory: "models/lrms"
+  history_limit: 20
+
+security:
+  restrict_file_permissions: true
+  allowed_users:
+    - current
+  validate_downloads: true
+
+logging:
+  level: "INFO"

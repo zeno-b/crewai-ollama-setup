@@ -1,0 +1,20 @@
+# Generated Modelfile for Ollama
+FROM {{ base_model }}
+PARAMETER temperature {{ temperature }}
+
+SYSTEM """
+{{ system_prompt }}
+"""
+
+{% if adapter %}
+ADAPTER {{ adapter }}
+{% endif %}
+
+{% if dataset %}
+# Training data reference
+DATASET "{{ dataset }}"
+{% endif %}
+
+{% if custom_parameters %}
+{{ custom_parameters }}
+{% endif %}

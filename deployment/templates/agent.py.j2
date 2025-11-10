@@ -1,0 +1,25 @@
+"""
+Auto-generated CrewAI agent definition.
+"""
+
+from crewai import Agent
+from typing import Optional
+
+
+def create_agent(llm: Optional[object] = None) -> Agent:
+    """
+    Construct and return an Agent instance.
+
+    Parameters
+    ----------
+    llm:
+        Optional language model to override the project default.
+    """
+    return Agent(
+        name="{{ name }}",
+        role="{{ role }}",
+        goal="{{ goal }}",
+        backstory="""{{ backstory }}""",
+        verbose={{ verbose|lower }},
+        llm=llm,
+    )

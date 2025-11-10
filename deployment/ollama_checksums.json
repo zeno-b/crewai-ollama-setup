@@ -1,0 +1,24 @@
+{
+  "0.3.14": {
+    "linux-amd64": {
+      "url": "https://ollama.com/download/linux-amd64",
+      "sha256": null
+    },
+    "linux-arm64": {
+      "url": "https://ollama.com/download/linux-arm64",
+      "sha256": null
+    },
+    "macos-amd64": {
+      "url": "https://ollama.com/download/macos-amd64",
+      "sha256": null
+    },
+    "macos-arm64": {
+      "url": "https://ollama.com/download/macos-arm64",
+      "sha256": null
+    },
+    "windows-amd64": {
+      "url": "https://ollama.com/download/windows-amd64",
+      "sha256": null
+    }
+  }
+}
