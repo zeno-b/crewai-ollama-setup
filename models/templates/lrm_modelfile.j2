@@ -1,0 +1,17 @@
+# Auto-generated on {{ created_at }} for {{ name }}
+FROM {{ base_model }}
+
+PARAMETER temperature {{ '%.2f' | format(temperature) }}
+PARAMETER top_p {{ '%.2f' | format(top_p) }}
+
+{% if system_prompt %}
+SYSTEM """
+{{ system_prompt }}
+"""
+{% endif %}
+
+{% if adapter_path %}
+ADAPTER {{ adapter_path }}
+{% endif %}
+
+# Additional directives can be added below as needed.

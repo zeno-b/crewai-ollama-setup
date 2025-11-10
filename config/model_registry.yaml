@@ -1,0 +1,7 @@
+version: 1
+active_model:
+  name: llama2:7b
+  activated_at: null
+  digest: null
+  source: default
+history: []

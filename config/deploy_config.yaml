@@ -1,0 +1,58 @@
+{
+  "python_min_version": "3.10",
+  "venv_path": ".venv",
+  "requirements_file": "requirements.txt",
+  "state_file": "config/deploy_state.json",
+  "model_registry": "config/model_registry.yaml",
+  "env_file": ".env",
+  "env_template": ".env.template",
+  "directories": [
+    "agents",
+    "backups",
+    "config",
+    "data",
+    "logs",
+    "models",
+    "models/build",
+    "models/templates",
+    "scripts"
+  ],
+  "docker": {
+    "enabled": true,
+    "compose_file": "docker-compose.deploy.yml",
+    "network": "crewai_stack",
+    "ollama": {
+      "image": "ollama/ollama:latest",
+      "port": 11434,
+      "volumes": {
+        "./models": "/root/.ollama",
+        "./data/ollama": "/data"
+      },
+      "env": {
+        "OLLAMA_HOST": "0.0.0.0"
+      }
+    },
+    "crewai": {
+      "build_context": ".",
+      "dockerfile": "Dockerfile.crewai",
+      "port": 8000,
+      "env": {
+        "OLLAMA_BASE_URL": "http://ollama:11434",
+        "CREWCTL_STATE_PATH": "/app/config/model_registry.yaml"
+      },
+      "volumes": {
+        "./agents": "/app/agents",
+        "./config": "/app/config",
+        "./logs": "/app/logs"
+      }
+    }
+  },
+  "secrets": {
+    "SECRET_KEY": {
+      "length": 64
+    },
+    "JWT_SECRET": {
+      "length": 64
+    }
+  }
+}
