@@ -41,10 +41,10 @@ services:
       context: .
       dockerfile: Dockerfile.crewai
     container_name: crewai-service
+    init: true
     restart: unless-stopped
     ports:
       - "8000:8000"
-      - "9090:9090"  # Metrics port
     volumes:
       - ./data/crewai:/app/data
       - ./logs:/app/logs
@@ -59,7 +59,10 @@ services:
       - SECRET_KEY=${SECRET_KEY:-default-secret-key}
       - JWT_SECRET=${JWT_SECRET:-default-jwt-secret}
       - ENABLE_METRICS=true
-      - METRICS_PORT=9090
+      - WORKERS=${CREWAI_WORKERS:-}
+      - GUNICORN_TIMEOUT=${CREWAI_TIMEOUT:-90}
+      - GUNICORN_GRACEFUL_TIMEOUT=${CREWAI_GRACEFUL_TIMEOUT:-30}
+      - GUNICORN_EXTRA=${GUNICORN_EXTRA:-}
     depends_on:
       ollama:
         condition: service_healthy
@@ -137,6 +140,8 @@ services:
       - crewai-network
     depends_on:
       - crewai
+    profiles:
+      - monitoring
     deploy:
       resources:
         limits:
@@ -161,10 +166,13 @@ services:
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
     networks:
       - crewai-network
     depends_on:
       - prometheus
+    profiles:
+      - monitoring
     deploy:
       resources:
         limits:
