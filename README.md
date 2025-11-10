@@ -1,6 +1,6 @@
 # CrewAI + Ollama Setup
 
-A comprehensive setup for running CrewAI with Ollama as the LLM backend, featuring custom agents, tasks, crews, and tools.
+A comprehensive setup for running CrewAI with Ollama as the LLM backend, featuring custom agents, tasks, crews, tools, and a self-contained deployment workflow.
 
 ## Features
 
@@ -27,9 +27,9 @@ git clone <repository-url>
 cd crewai-ollama-setup
 ```
 
-2. Start the services:
+2. Use the deployment helper to validate dependencies, install requirements, and start the services:
 ```bash
-docker-compose up -d
+python scripts/deploy.py deploy
 ```
 
 3. Verify Ollama is running:
@@ -112,6 +112,8 @@ result = search_tool._run(query="AI latest developments")
 crewai-ollama-setup/
 ├── docker-compose.yml          # Docker services configuration
 ├── Dockerfile.crewai           # CrewAI container setup
+├── scripts/
+│   └── deploy.py               # Self-contained deployment & rollback helper
 ├── requirements.txt            # Python dependencies
 ├── main.py                     # Entry point
 ├── config/
@@ -127,6 +129,36 @@ crewai-ollama-setup/
 ├── setup.py                    # Package setup
 └── README.md                   # This file
 ```
+
+### Deployment Helper (`scripts/deploy.py`)
+
+`scripts/deploy.py` is a self-contained orchestrator that:
+- Validates Docker, Docker Compose, and Python prerequisites
+- Bootstraps a project virtual environment and installs dependencies from `requirements.txt`
+- Ensures runtime directories (`data`, `logs`, `models`, `backups`) exist before compose starts
+- Launches services via Docker Compose, optionally rebuilding images
+- Provides a destructive rollback routine that stops containers, removes volumes, deletes generated directories, and (by default) removes the managed virtual environment
+
+Common usage:
+```bash
+# Validate prerequisites, sync dependencies, but do not start services
+python scripts/deploy.py check
+
+# Deploy the stack (pulls images, installs requirements, creates directories)
+python scripts/deploy.py deploy
+
+# Inspect docker compose status
+python scripts/deploy.py status
+
+# Fully rollback (stops containers, removes volumes & data directories, deletes .venv by default)
+python scripts/deploy.py rollback
+
+# Rollback but keep the virtualenv and remove built images as well
+python scripts/deploy.py rollback --keep-venv --remove-images
+```
+
+> **Warning**
+> `rollback` is destructive. By default it removes containers, volumes, generated data, and the managed virtual environment. Use the flags above to tailor cleanup behaviour.
 
 ## Available Tools
 
