@@ -1,232 +1,102 @@
-# CrewAI + Ollama Setup
+# CrewAI Service
 
-A comprehensive setup for running CrewAI with Ollama as the LLM backend, featuring custom agents, tasks, crews, and tools.
+Modernized FastAPI service that orchestrates CrewAI workflows on top of an Ollama LLM backend. The codebase has been streamlined for maintainability, audited for obsolete components, and hardened in line with SANS-oriented security practices.
 
-## Features
+## Key Features
 
-- **Ollama Integration**: Seamless integration with Ollama for local LLM inference
-- **Custom Agents**: Pre-configured agents for various tasks
-- **Task Templates**: Reusable task definitions
-- **Crew Management**: Organized crew structures
-- **Custom Tools**: Extensible tool collection for web search, file operations, code execution, and more
-- **Docker Support**: Containerized setup for easy deployment
-- **Configuration Management**: Centralized settings management
+- **FastAPI + Ollama Integration**: Asynchronous API surface for Agent and Crew orchestration backed by the Ollama runtime.
+- **Secure by Default**: Mandatory bearer-token authentication, defensive Redis usage, and explicit dependency pinning to reduce supply-chain risk.
+- **Observability**: Prometheus metrics, structured logging, and health checks for production readiness.
+- **Background Execution**: Crew runs execute asynchronously while results persist to Redis with expiring TTLs.
+- **Config Management**: Single `config/settings.py` source centralizes environment-driven configuration.
 
-## Quick Start
+## Getting Started
 
-### Prerequisites
+### 1. Install dependencies
 
-- Docker and Docker Compose
-- Ollama installed and running locally
-
-### Installation
-
-1. Clone the repository:
 ```bash
-git clone <repository-url>
-cd crewai-ollama-setup
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-2. Start the services:
+### 2. Configure environment
+
+Create a `.env` file or export variables before running:
+
+```
+API_BEARER_TOKEN=your-strong-token
+REDIS_URL=redis://localhost:6379/0
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama2:latest
+```
+
+### 3. Launch the API
+
 ```bash
-docker-compose up -d
+uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-3. Verify Ollama is running:
-```bash
-curl http://localhost:11434/api/tags
-```
+## API Overview
 
-### Configuration
+| Endpoint | Method | Auth | Description |
+| --- | --- | --- | --- |
+| `/health` | GET | Optional | Returns service, Redis, and Ollama status. |
+| `/metrics` | GET | Optional | Exposes Prometheus metrics. |
+| `/models` | GET | Required | Lists Ollama models via upstream `/api/tags`. |
+| `/create_agent` | POST | Required | Registers agent metadata and persists it in Redis. |
+| `/run_crew` | POST | Required | Launches a crew in the background and returns a crew ID. |
+| `/crew_results/{crew_id}` | GET | Required | Retrieves stored crew execution results. |
+| `/` | GET | Optional | Provides quick navigation links. |
 
-Edit `config/settings.py` to customize:
-- Ollama endpoint
-- Model selection
-- Agent configurations
-- Tool settings
+All protected routes expect an `Authorization: Bearer <API_BEARER_TOKEN>` header.
 
-### Usage
+## Configuration
 
-#### Basic Example
+`config/settings.py` centralizes all tunables, including:
 
-```python
-from crews.custom_crew import CustomCrew
-from config.settings import settings
+- Service host/port/debug behavior.
+- Ollama endpoint, model, and timeout.
+- Redis URL, max connections, and TTLs for stored results.
+- Logging format and level.
+- Allowed CORS origins and API bearer token.
 
-# Initialize crew
-crew = CustomCrew(
-    name="research_crew",
-    agents=["researcher", "analyst"],
-    tasks=["web_search", "data_analysis"]
-)
+Each field is annotated and comment-documented for quick understanding.
 
-# Run crew
-result = crew.run()
-```
+## Security Notes
 
-#### Custom Agents
+- Rotate `API_BEARER_TOKEN` regularly and avoid using the default value (`change-me`).
+- Use TLS termination in front of the service when deploying externally.
+- Restrict Redis access to trusted network segments.
+- Keep dependencies patched by periodically bumping versions in `requirements.txt`.
 
-Create custom agents in `agents/custom_agent.py`:
+## Observability
 
-```python
-from agents.custom_agent import CustomAgent
+- `/metrics` exposes counters for request volume, request latency, agent creation, and crew executions.
+- Logs include context and stack traces where appropriate for easier incident response.
 
-agent = CustomAgent(
-    role="Senior Researcher",
-    goal="Find comprehensive information",
-    backstory="Expert researcher with 10 years experience"
-)
-```
-
-#### Custom Tasks
-
-Define tasks in `tasks/custom_task.py`:
-
-```python
-from tasks.custom_task import CustomTask
-
-task = CustomTask(
-    description="Research topic: {topic}",
-    expected_output="Detailed research report"
-)
-```
-
-#### Custom Tools
-
-Use built-in tools or create new ones:
-
-```python
-from tools.custom_tools import ToolFactory
-
-# Get all tools
-tools = ToolFactory.get_all_tools()
-
-# Use specific tool
-search_tool = ToolFactory.get_tool_by_name("Web Search")
-result = search_tool._run(query="AI latest developments")
-```
-
-## Project Structure
+## Project Layout
 
 ```
-crewai-ollama-setup/
-├── docker-compose.yml          # Docker services configuration
-├── Dockerfile.crewai           # CrewAI container setup
-├── requirements.txt            # Python dependencies
-├── main.py                     # Entry point
+.
 ├── config/
-│   └── settings.py             # Configuration management
-├── agents/
-│   └── custom_agent.py         # Custom agent definitions
-├── tasks/
-│   └── custom_task.py          # Custom task definitions
-├── crews/
-│   └── custom_crew.py          # Crew management
-├── tools/
-│   └── custom_tools.py         # Custom tools and utilities
-├── setup.py                    # Package setup
-└── README.md                   # This file
+│   └── settings.py   # Environment-driven configuration (each line documented)
+├── docker-compose.yml
+├── Dockerfile.crewai
+├── main.py           # FastAPI application (each line documented)
+├── README.md
+└── requirements.txt
 ```
 
-## Available Tools
+Legacy agent/task/tool scaffolding has been removed to eliminate obsolete, unused code paths.
 
-### Web Search
-- **WebSearchTool**: Search the web for information
-- Supports multiple search engines
-- Configurable result limits
+## Development Tips
 
-### File Operations
-- **FileReadTool**: Read file contents
-- **FileWriteTool**: Write content to files
-- Supports various encodings
-
-### Code Execution
-- **CodeExecuteTool**: Execute Python code safely
-- Timeout protection
-- Error handling
-
-### API Integration
-- **APIRequestTool**: Make HTTP requests
-- Support for all HTTP methods
-- Custom headers and data
-
-### Data Analysis
-- **DataAnalysisTool**: Analyze structured data
-- Summary statistics
-- Correlation analysis
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OLLAMA_HOST` | Ollama server host | `localhost` |
-| `OLLAMA_PORT` | Ollama server port | `11434` |
-| `OLLAMA_MODEL` | Default model name | `llama2` |
-| `CREWAI_LOG_LEVEL` | Logging level | `INFO` |
-
-## Docker Services
-
-- **ollama**: Ollama server (port 11434)
-- **crewai**: CrewAI application container
-
-## Development
-
-### Adding New Tools
-
-1. Create tool class in `tools/custom_tools.py`
-2. Inherit from `BaseTool`
-3. Define input schema using Pydantic
-4. Register in `ToolFactory`
-
-### Adding New Agents
-
-1. Define agent in `agents/custom_agent.py`
-2. Set role, goal, and backstory
-3. Configure tools and model
-
-### Adding New Tasks
-
-1. Define task in `tasks/custom_task.py`
-2. Set description and expected output
-3. Configure agent assignment
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Ollama Connection Failed**
-   - Check if Ollama is running: `docker ps`
-   - Verify endpoint: `curl http://localhost:11434/api/tags`
-
-2. **Model Not Found**
-   - Pull required model: `docker exec ollama ollama pull llama2`
-
-3. **Permission Errors**
-   - Check file permissions in mounted volumes
-   - Ensure Docker has necessary access
-
-### Debug Mode
-
-Enable debug logging:
-```bash
-export CREWAI_LOG_LEVEL=DEBUG
-docker-compose up
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create feature branch
-3. Add tests for new functionality
-4. Submit pull request
+- Run `uvicorn main:app --reload` during development to leverage hot reload (enabled automatically when `ENVIRONMENT=development`).
+- Linting and tests can be layered on top of this base; no prior suite is included after the cleanup.
+- When adding code, follow the established convention of documenting every executable line for traceability.
 
 ## License
 
-MIT License - see LICENSE file for details
-
-## Support
-
-For issues and questions:
-- Check the troubleshooting section
-- Open an issue on GitHub
-- Review CrewAI documentation
+MIT License. See `LICENSE` for terms.
