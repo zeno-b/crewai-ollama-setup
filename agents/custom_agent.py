@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Any
 from crewai import Agent
-from langchain_ollama import OllamaLLM
+from langchain_community.llms import Ollama
 import logging
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ class CustomAgent:
         role: str,
         goal: str,
         backstory: str,
-        llm: OllamaLLM,
+        llm: Ollama,
         tools: Optional[List[str]] = None,
         verbose: bool = False,
         allow_delegation: bool = False,
@@ -99,7 +99,7 @@ class AgentFactory:
     """Factory class for creating agents"""
     
     @staticmethod
-    def create_research_agent(llm: OllamaLLM, verbose: bool = False) -> CustomAgent:
+    def create_research_agent(llm: Ollama, verbose: bool = False) -> CustomAgent:
         """Create a research agent"""
         return CustomAgent(
             name="research_agent",
@@ -114,7 +114,7 @@ class AgentFactory:
         )
     
     @staticmethod
-    def create_writer_agent(llm: OllamaLLM, verbose: bool = False) -> CustomAgent:
+    def create_writer_agent(llm: Ollama, verbose: bool = False) -> CustomAgent:
         """Create a writer agent"""
         return CustomAgent(
             name="writer_agent",
@@ -129,7 +129,7 @@ class AgentFactory:
         )
     
     @staticmethod
-    def create_analyst_agent(llm: OllamaLLM, verbose: bool = False) -> CustomAgent:
+    def create_analyst_agent(llm: Ollama, verbose: bool = False) -> CustomAgent:
         """Create an analyst agent"""
         return CustomAgent(
             name="analyst_agent",
@@ -144,7 +144,7 @@ class AgentFactory:
         )
     
     @staticmethod
-    def create_coder_agent(llm: OllamaLLM, verbose: bool = False) -> CustomAgent:
+    def create_coder_agent(llm: Ollama, verbose: bool = False) -> CustomAgent:
         """Create a coder agent"""
         return CustomAgent(
             name="coder_agent",

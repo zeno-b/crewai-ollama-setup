@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Any
 from crewai import Crew, Task, Agent
-from langchain_ollama import OllamaLLM
+from langchain_community.llms import Ollama
 import logging
 from datetime import datetime
 import json
@@ -23,8 +23,8 @@ class CustomCrew:
         tasks: List[CustomTask],
         verbose: bool = False,
         process: str = "sequential",
-        manager_llm: Optional[OllamaLLM] = None,
-        function_calling_llm: Optional[OllamaLLM] = None,
+        manager_llm: Optional[Ollama] = None,
+        function_calling_llm: Optional[Ollama] = None,
         config: Optional[Dict[str, Any]] = None,
         cache: bool = True,
         max_rpm: Optional[int] = None,
@@ -230,7 +230,7 @@ class CrewFactory:
     
     @staticmethod
     def create_research_crew(
-        llm: OllamaLLM,
+        llm: Ollama,
         topic: str,
         verbose: bool = False
     ) -> CustomCrew:
@@ -258,7 +258,7 @@ class CrewFactory:
     
     @staticmethod
     def create_analysis_crew(
-        llm: OllamaLLM,
+        llm: Ollama,
         data: str,
         verbose: bool = False
     ) -> CustomCrew:
@@ -285,7 +285,7 @@ class CrewFactory:
     
     @staticmethod
     def create_coding_crew(
-        llm: OllamaLLM,
+        llm: Ollama,
         requirements: str,
         language: str = "python",
         verbose: bool = False

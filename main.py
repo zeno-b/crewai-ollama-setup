@@ -13,7 +13,7 @@ from prometheus_client.openmetrics.exposition import CONTENT_TYPE_LATEST
 from fastapi.responses import PlainTextResponse
 
 from crewai import Agent, Task, Crew
-from langchain_ollama import OllamaLLM
+from langchain_community.llms import Ollama
 import redis.asyncio as redis
 import asyncio
 from datetime import datetime
@@ -34,7 +34,7 @@ CREW_EXECUTIONS = Counter('crewai_crew_executions_total', 'Total crew executions
 
 # Global variables
 redis_client = None
-ollama_llm = None
+ollama_llm: Optional[Ollama] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
     ollama_model = os.getenv("OLLAMA_MODEL", "llama2:7b")
     
     try:
-        ollama_llm = OllamaLLM(
+        ollama_llm = Ollama(
             base_url=ollama_base_url,
             model=ollama_model
         )
@@ -333,7 +333,7 @@ async def root():
 if __name__ == "__main__":
     port = int(os.getenv("CREWAI_PORT", 8000))
     uvicorn.run(
-        "main:app",
+        app,
         host="0.0.0.0",
         port=port,
         reload=os.getenv("RELOAD", "false").lower() == "true"
