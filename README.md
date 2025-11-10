@@ -37,6 +37,39 @@ docker-compose up -d
 curl http://localhost:11434/api/tags
 ```
 
+### Self-Contained Deployment Script
+
+Use the deployment CLI for an automated, fully self-contained workflow that prepares dependencies, configuration, and Docker resources.
+
+```bash
+python3 scripts/deploy.py deploy
+```
+
+- Creates (or reuses) a local `.venv` and installs `requirements.txt`
+- Generates required runtime directories plus default Prometheus/Grafana configs
+- Builds or pulls the containers and starts the full stack
+
+Check running services:
+
+```bash
+python3 scripts/deploy.py status
+```
+
+Perform a full rollback (stop containers, remove volumes/images, delete data/logs/models, and drop the virtualenv):
+
+```bash
+python3 scripts/deploy.py rollback
+```
+
+Common options:
+
+- `--no-build`: skip rebuilding images when you only need to restart containers
+- `--no-pull`: avoid pulling remote images during deployment
+- `--skip-deps`: reuse the existing virtual environment without reinstalling packages
+- `--prod`: include `docker-compose.prod.yml` overrides
+- `--force`: force rollback cleanup even if Docker commands fail
+- `--keep-venv`: preserve the `.venv` directory during rollback
+
 ### Configuration
 
 Edit `config/settings.py` to customize:
