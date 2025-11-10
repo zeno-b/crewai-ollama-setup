@@ -1,5 +1,4 @@
 # Production overrides
-version: '3.8'
 
 services:
   crewai:

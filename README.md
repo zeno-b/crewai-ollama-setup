@@ -206,6 +206,8 @@ docker compose up -d
 docker compose --profile monitoring up -d
 ```
 
+> Start the core services first (`docker compose up -d`) and only then enable the monitoring profile. You can later stop the dashboards without touching the app via `docker compose --profile monitoring down`.
+
 Grafana provides a pre-built **CrewAI Overview** dashboard and connects automatically to Prometheus. Default credentials are `admin / ${GRAFANA_PASSWORD:-admin}`.
 
 ## Retraining Workflow
