@@ -20,6 +20,7 @@ import asyncio
 from datetime import datetime
 import json
 from uuid import uuid4
+from secrets import compare_digest
 import time
 
 from config.settings import settings
@@ -40,6 +41,9 @@ CREW_EXECUTIONS = Counter('crewai_crew_executions_total', 'Total crew executions
 RETRAINING_JOBS_COUNTER = Counter('crewai_retraining_jobs_total', 'Total retraining jobs processed', ['status'])
 RETRAINING_JOB_DURATION = Histogram('crewai_retraining_job_duration_seconds', 'Retraining job duration in seconds')
 
+# Observability constants
+REQUEST_ID_HEADER = "X-Request-ID"
+
 # Global variables
 redis_client = None
 ollama_llm: Optional[Ollama] = None
@@ -54,18 +58,26 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting CrewAI service...")
     
-    # Initialize Redis
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-    redis_client = redis.from_url(
-        redis_url,
-        max_connections=settings.redis_max_connections,
-        encoding="utf-8",
-        decode_responses=True
-    )
+    # Initialize Redis as early as possible so other components can rely on it.
+    redis_url = settings.redis_url
+    try:
+        redis_client = redis.from_url(
+            redis_url,
+            password=settings.redis_password,
+            db=settings.redis_db,
+            max_connections=settings.redis_max_connections,
+            encoding="utf-8",
+            decode_responses=True
+        )
+        await redis_client.ping()
+        logger.info("Connected to Redis at %s", redis_url)
+    except Exception as exc:
+        logger.error("Failed to initialize Redis (%s): %s", redis_url, exc)
+        redis_client = None
     
     # Initialize Ollama
-    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    ollama_model = os.getenv("OLLAMA_MODEL", "llama2:7b")
+    ollama_base_url = settings.ollama_base_url
+    ollama_model = settings.ollama_model
     
     try:
         ollama_llm = Ollama(
@@ -119,18 +131,30 @@ app.add_middleware(
 
 @app.middleware("http")
 async def metrics_middleware(request: Request, call_next):
-    """Track basic request metrics for Prometheus."""
+    """Track basic request metrics for Prometheus and tag responses with a request ID."""
     method = request.method
     endpoint = request.url.path
+    request_id = request.headers.get(REQUEST_ID_HEADER) or uuid4().hex
     start_time = time.perf_counter()
     
     try:
         response = await call_next(request)
-        return response
+    except Exception as exc:
+        logger.exception(
+            "Unhandled error while processing %s %s (request_id=%s)",
+            method,
+            endpoint,
+            request_id,
+        )
+        raise
     finally:
         duration = time.perf_counter() - start_time
         REQUEST_COUNT.labels(method=method, endpoint=endpoint).inc()
         REQUEST_DURATION.observe(duration)
+    
+    response.headers[REQUEST_ID_HEADER] = request_id
+    response.headers.setdefault("Cache-Control", "no-store")
+    return response
 
 # Security
 security = HTTPBearer()
@@ -229,8 +253,17 @@ class RetrainingJobLogsResponse(BaseModel):
 
 # Dependency to get current user (placeholder)
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    # Implement your authentication logic here
-    return {"user_id": "default_user"}
+    """Validate bearer tokens using a static secret until JWT/OAuth is configured."""
+    expected_token = settings.api_access_token or settings.secret_key
+    if not expected_token:
+        logger.error("Authentication attempted but no API token configured")
+        raise HTTPException(status_code=503, detail="Authentication not configured")
+    
+    provided_token = credentials.credentials if credentials else None
+    if not provided_token or not compare_digest(provided_token, expected_token):
+        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+    
+    return {"user_id": "service_account"}
 
 # Health check endpoint
 @app.get("/health", response_model=HealthResponse)
@@ -265,7 +298,7 @@ async def metrics():
 
 # List available models
 @app.get("/models", response_model=ModelsResponse)
-async def list_models():
+async def list_models(_user: Dict[str, Any] = Depends(get_current_user)):
     """List available Ollama models"""
     if not ollama_llm:
         raise HTTPException(status_code=503, detail="Ollama not connected")
@@ -286,7 +319,10 @@ async def list_models():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/datasets", response_model=DatasetInfo, status_code=201)
-async def create_dataset(dataset: DatasetCreateRequest):
+async def create_dataset(
+    dataset: DatasetCreateRequest,
+    _user: Dict[str, Any] = Depends(get_current_user),
+):
     """Create or replace a training dataset."""
     if not dataset_manager:
         raise HTTPException(status_code=503, detail="Dataset manager not initialized")
@@ -309,7 +345,7 @@ async def create_dataset(dataset: DatasetCreateRequest):
         raise HTTPException(status_code=500, detail="Failed to save dataset")
 
 @app.get("/datasets", response_model=DatasetListResponse)
-async def list_datasets():
+async def list_datasets(_user: Dict[str, Any] = Depends(get_current_user)):
     """List available training datasets."""
     if not dataset_manager:
         raise HTTPException(status_code=503, detail="Dataset manager not initialized")
@@ -319,7 +355,11 @@ async def list_datasets():
     return DatasetListResponse(datasets=datasets)
 
 @app.get("/datasets/{dataset_name}", response_model=DatasetDetail)
-async def get_dataset(dataset_name: str, include_content: bool = False):
+async def get_dataset(
+    dataset_name: str,
+    include_content: bool = False,
+    _user: Dict[str, Any] = Depends(get_current_user),
+):
     """Retrieve dataset metadata (and optionally content)."""
     if not dataset_manager:
         raise HTTPException(status_code=503, detail="Dataset manager not initialized")
@@ -331,7 +371,10 @@ async def get_dataset(dataset_name: str, include_content: bool = False):
         raise HTTPException(status_code=404, detail=str(exc))
 
 @app.delete("/datasets/{dataset_name}")
-async def delete_dataset(dataset_name: str):
+async def delete_dataset(
+    dataset_name: str,
+    _user: Dict[str, Any] = Depends(get_current_user),
+):
     """Delete a dataset."""
     if not dataset_manager:
         raise HTTPException(status_code=503, detail="Dataset manager not initialized")
@@ -343,7 +386,10 @@ async def delete_dataset(dataset_name: str):
         raise HTTPException(status_code=404, detail=str(exc))
 
 @app.post("/retraining/jobs", response_model=RetrainingJobStatus, status_code=202)
-async def create_retraining_job(job_request: RetrainingJobRequest):
+async def create_retraining_job(
+    job_request: RetrainingJobRequest,
+    _user: Dict[str, Any] = Depends(get_current_user),
+):
     """Schedule a new retraining job."""
     if not retraining_manager or not dataset_manager:
         raise HTTPException(status_code=503, detail="Retraining components not initialized")
@@ -368,7 +414,10 @@ async def create_retraining_job(job_request: RetrainingJobRequest):
     return RetrainingJobStatus(**job_record)
 
 @app.get("/retraining/jobs", response_model=RetrainingJobListResponse)
-async def list_retraining_jobs(limit: int = 50):
+async def list_retraining_jobs(
+    limit: int = 50,
+    _user: Dict[str, Any] = Depends(get_current_user),
+):
     """List retraining jobs."""
     if not retraining_manager:
         raise HTTPException(status_code=503, detail="Retraining components not initialized")
@@ -378,7 +427,10 @@ async def list_retraining_jobs(limit: int = 50):
     return RetrainingJobListResponse(jobs=jobs)
 
 @app.get("/retraining/jobs/{job_id}", response_model=RetrainingJobStatus)
-async def get_retraining_job(job_id: str):
+async def get_retraining_job(
+    job_id: str,
+    _user: Dict[str, Any] = Depends(get_current_user),
+):
     """Get retraining job status."""
     if not retraining_manager:
         raise HTTPException(status_code=503, detail="Retraining components not initialized")
@@ -390,7 +442,11 @@ async def get_retraining_job(job_id: str):
         raise HTTPException(status_code=404, detail=str(exc))
 
 @app.get("/retraining/jobs/{job_id}/logs", response_model=RetrainingJobLogsResponse)
-async def get_retraining_logs(job_id: str, tail: int = 100):
+async def get_retraining_logs(
+    job_id: str,
+    tail: int = 100,
+    _user: Dict[str, Any] = Depends(get_current_user),
+):
     """Retrieve retraining job logs."""
     if not retraining_manager:
         raise HTTPException(status_code=503, detail="Retraining components not initialized")
@@ -400,7 +456,10 @@ async def get_retraining_logs(job_id: str, tail: int = 100):
 
 # Create agent endpoint
 @app.post("/create_agent")
-async def create_agent(agent_config: AgentConfig):
+async def create_agent(
+    agent_config: AgentConfig,
+    _user: Dict[str, Any] = Depends(get_current_user),
+):
     """Create a new agent"""
     if not ollama_llm:
         raise HTTPException(status_code=503, detail="Ollama not connected")
@@ -435,13 +494,17 @@ async def create_agent(agent_config: AgentConfig):
         
         return {"message": f"Agent {agent_config.name} created successfully"}
         
-    except Exception as e:
-        logger.error(f"Error creating agent: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        logger.exception("Error creating agent %s: %s", agent_config.name, exc)
+        raise HTTPException(status_code=500, detail="Failed to create agent")
 
 # Run crew endpoint
 @app.post("/run_crew")
-async def run_crew(crew_config: CrewConfig, background_tasks: BackgroundTasks):
+async def run_crew(
+    crew_config: CrewConfig,
+    background_tasks: BackgroundTasks,
+    _user: Dict[str, Any] = Depends(get_current_user),
+):
     """Run a crew with specified agents and tasks"""
     if not ollama_llm:
         raise HTTPException(status_code=503, detail="Ollama not connected")
@@ -491,14 +554,15 @@ async def run_crew(crew_config: CrewConfig, background_tasks: BackgroundTasks):
         
         return {"message": "Crew execution started", "crew_id": crew_id}
     
-    except Exception as e:
-        logger.error(f"Error running crew: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        logger.exception("Error running crew: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to start crew execution")
 
 async def run_crew_async(crew: Crew, crew_config: CrewConfig, crew_id: str):
     """Run crew execution asynchronously"""
     try:
-        result = crew.kickoff()
+        # Crew execution is CPU/network heavy; run it in a thread to keep the event loop responsive.
+        result = await asyncio.to_thread(crew.kickoff)
         logger.info(f"Crew execution completed: {result}")
         
         # Store result in Redis
@@ -519,7 +583,10 @@ async def run_crew_async(crew: Crew, crew_config: CrewConfig, crew_id: str):
 
 # Get crew results
 @app.get("/crew_results/{crew_id}")
-async def get_crew_result(crew_id: str):
+async def get_crew_result(
+    crew_id: str,
+    _user: Dict[str, Any] = Depends(get_current_user),
+):
     """Get crew execution results"""
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis not available")
@@ -531,9 +598,14 @@ async def get_crew_result(crew_id: str):
         
         return json.loads(result)
         
-    except Exception as e:
-        logger.error(f"Error retrieving crew result: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except json.JSONDecodeError as exc:
+        logger.error("Corrupted crew result payload for %s: %s", crew_id, exc)
+        raise HTTPException(status_code=500, detail="Crew result is corrupted")
+    except Exception as exc:
+        logger.exception("Error retrieving crew result: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to retrieve crew result")
 
 # Root endpoint
 @app.get("/")

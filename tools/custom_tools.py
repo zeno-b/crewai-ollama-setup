@@ -5,11 +5,31 @@ import requests
 import json
 import os
 import logging
-from datetime import datetime
 import subprocess
-import re
+from pathlib import Path
+import tempfile
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+_BASE_WORKSPACE = Path(os.getenv("AGENT_TOOLS_BASE_DIR", "/workspace")).expanduser().resolve()
+try:
+    _BASE_WORKSPACE.mkdir(parents=True, exist_ok=True)
+except Exception as exc:
+    logger.warning("Unable to ensure workspace directory exists: %s", exc)
+
+
+def _resolve_within_workspace(path: str) -> Path:
+    """Ensure the requested path stays within the allowed workspace."""
+    candidate = Path(path).expanduser().resolve()
+    try:
+        candidate.relative_to(_BASE_WORKSPACE)
+    except ValueError as exc:
+        raise ValueError(
+            f"Path '{candidate}' is outside the permitted workspace: {_BASE_WORKSPACE}"
+        ) from exc
+    return candidate
+
 
 class WebSearchInput(BaseModel):
     """Input schema for web search tool"""
@@ -56,17 +76,19 @@ class FileReadTool(BaseTool):
     def _run(self, file_path: str, encoding: str = "utf-8") -> str:
         """Read file content"""
         try:
-            if not os.path.exists(file_path):
-                return f"Error: File not found: {file_path}"
+            safe_path = _resolve_within_workspace(file_path)
+            if not safe_path.exists():
+                return f"Error: File not found: {safe_path}"
             
-            with open(file_path, 'r', encoding=encoding) as f:
-                content = f.read()
+            with safe_path.open('r', encoding=encoding) as f:
+                return f.read()
             
-            return content
-            
-        except Exception as e:
-            logger.error(f"File read failed: {str(e)}")
-            return f"Error: {str(e)}"
+        except ValueError as exc:
+            logger.warning("Blocked file read: %s", exc)
+            return f"Error: {exc}"
+        except Exception as exc:
+            logger.error("File read failed (%s): %s", file_path, exc)
+            return f"Error: {str(exc)}"
 
 class FileWriteInput(BaseModel):
     """Input schema for file write tool"""
@@ -83,17 +105,20 @@ class FileWriteTool(BaseTool):
     def _run(self, file_path: str, content: str, encoding: str = "utf-8") -> str:
         """Write content to file"""
         try:
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            safe_path = _resolve_within_workspace(file_path)
+            safe_path.parent.mkdir(parents=True, exist_ok=True)
             
-            with open(file_path, 'w', encoding=encoding) as f:
+            with safe_path.open('w', encoding=encoding) as f:
                 f.write(content)
             
-            return f"Successfully wrote to file: {file_path}"
+            return f"Successfully wrote to file: {safe_path}"
             
-        except Exception as e:
-            logger.error(f"File write failed: {str(e)}")
-            return f"Error: {str(e)}"
+        except ValueError as exc:
+            logger.warning("Blocked file write: %s", exc)
+            return f"Error: {exc}"
+        except Exception as exc:
+            logger.error("File write failed (%s): %s", file_path, exc)
+            return f"Error: {str(exc)}"
 
 class CodeExecuteInput(BaseModel):
     """Input schema for code execution tool"""
@@ -109,37 +134,38 @@ class CodeExecuteTool(BaseTool):
     
     def _run(self, code: str, language: str = "python", timeout: int = 30) -> str:
         """Execute code"""
+        temp_file: Optional[str] = None
         try:
             if language.lower() != "python":
-                return f"Error: Only Python is currently supported"
+                return "Error: Only Python is currently supported"
             
-            # Create temporary file
-            temp_file = f"/tmp/code_execute_{datetime.now().timestamp()}.py"
+            with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as tmp:
+                tmp.write(code)
+                temp_file = tmp.name
             
-            with open(temp_file, 'w') as f:
-                f.write(code)
-            
-            # Execute code
             result = subprocess.run(
-                ["python", temp_file],
+                ["python", "-I", temp_file],
                 capture_output=True,
                 text=True,
-                timeout=timeout
+                timeout=timeout,
+                cwd=str(_BASE_WORKSPACE),
             )
-            
-            # Clean up
-            os.remove(temp_file)
             
             if result.returncode == 0:
                 return result.stdout
-            else:
-                return f"Error: {result.stderr}"
+            return f"Error: {result.stderr.strip()}"
                 
         except subprocess.TimeoutExpired:
             return f"Error: Code execution timed out after {timeout} seconds"
-        except Exception as e:
-            logger.error(f"Code execution failed: {str(e)}")
-            return f"Error: {str(e)}"
+        except Exception as exc:
+            logger.error("Code execution failed: %s", exc)
+            return f"Error: {str(exc)}"
+        finally:
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except OSError as cleanup_exc:
+                    logger.warning("Failed to remove temp file %s: %s", temp_file, cleanup_exc)
 
 class APIRequestInput(BaseModel):
     """Input schema for API request tool"""
@@ -160,6 +186,9 @@ class APIRequestTool(BaseTool):
         """Make API request"""
         try:
             method = method.upper()
+            parsed = urlparse(url)
+            if parsed.scheme not in {"http", "https"}:
+                return "Error: Only HTTP/HTTPS URLs are supported"
             
             request_kwargs = {
                 "url": url,
@@ -180,9 +209,11 @@ class APIRequestTool(BaseTool):
                 "content": response.text
             }, indent=2)
             
-        except Exception as e:
-            logger.error(f"API request failed: {str(e)}")
-            return f"Error: {str(e)}"
+        except requests.RequestException as exc:
+            logger.error("API request failed: %s", exc)
+            return f"Error: {str(exc)}"
+        except ValueError as exc:
+            return f"Error: {exc}"
 
 class DataAnalysisInput(BaseModel):
     """Input schema for data analysis tool"""

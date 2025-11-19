@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="your-secret-key-change-this", env="SECRET_KEY")
     algorithm: str = Field(default="HS256", env="ALGORITHM")
     access_token_expire_minutes: int = Field(default=30, env="ACCESS_TOKEN_EXPIRE_MINUTES")
+    api_access_token: Optional[str] = Field(
+        default=None,
+        env="API_ACCESS_TOKEN",
+        description="Static bearer token used when OAuth/JWT is not configured",
+    )
     
     # Logging Settings
     log_level: str = Field(default="INFO", env="LOG_LEVEL")

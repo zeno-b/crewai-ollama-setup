@@ -13,7 +13,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# Regex used to aggressively sanitize dataset and job names so they remain filesystem-safe.
 _NAME_SANITIZER = re.compile(r"[^a-zA-Z0-9_-]+")
+# Default template payload clamp; keeps modelfile generation bounded in size.
 MAX_DATASET_CHARS = 120_000
 
 
@@ -39,6 +41,7 @@ class DatasetManager:
         self._metadata = self._load_metadata()
 
     def _load_metadata(self) -> Dict[str, Dict[str, Any]]:
+        """Load dataset metadata from disk, tolerating partial/corrupt files."""
         if self.metadata_path.exists():
             try:
                 with self.metadata_path.open("r", encoding="utf-8") as f:
@@ -50,6 +53,7 @@ class DatasetManager:
         return {}
 
     def _persist_metadata(self) -> None:
+        """Persist metadata atomically to avoid corruption on crash."""
         tmp_path = self.metadata_path.with_suffix(".tmp")
         with tmp_path.open("w", encoding="utf-8") as f:
             json.dump(self._metadata, f, indent=2)
@@ -64,6 +68,7 @@ class DatasetManager:
         fmt: str,
         overwrite: bool = False,
     ) -> Dict[str, Any]:
+        # Use a re-entrant lock so multiple worker threads cannot stomp on metadata/files.
         with self._lock:
             dataset_id = _sanitize_name(name)
             extension = ".jsonl" if fmt == "jsonl" else ".txt"
@@ -72,8 +77,10 @@ class DatasetManager:
             if dataset_id in self._metadata and not overwrite:
                 raise ValueError(f"Dataset '{dataset_id}' already exists. Use overwrite flag to replace it.")
 
-            with dataset_path.open("w", encoding="utf-8") as f:
+            tmp_dataset_path = dataset_path.with_suffix(dataset_path.suffix + ".tmp")
+            with tmp_dataset_path.open("w", encoding="utf-8") as f:
                 f.write(content)
+            tmp_dataset_path.replace(dataset_path)
 
             size_bytes = dataset_path.stat().st_size
             timestamp = _utcnow()
@@ -159,14 +166,17 @@ class RetrainingJobManager:
         self._lock = asyncio.Lock()
 
     def _job_dir(self, job_id: str) -> Path:
+        """Return (and create) the directory used to store job artifacts."""
         path = self.jobs_dir / job_id
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     def _job_status_path(self, job_id: str) -> Path:
+        """Path to the persisted job status JSON file."""
         return self._job_dir(job_id) / "status.json"
 
     def _job_log_path(self, job_id: str) -> Path:
+        """Path to the newline-delimited log file."""
         return self._job_dir(job_id) / "logs.ndjson"
 
     def _job_key(self, job_id: str) -> str:
@@ -314,6 +324,7 @@ class RetrainingJobManager:
         modelfile: str,
         timeout: int,
     ) -> None:
+        """Call Ollama create endpoint and capture streaming output."""
         url = f"{self.ollama_base_url}/api/create"
         request_payload: Dict[str, Any] = {
             "model": payload["model_name"],
