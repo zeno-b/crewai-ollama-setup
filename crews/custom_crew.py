@@ -176,14 +176,13 @@ class CustomCrew:
     async def execute_async(self, inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Execute the crew asynchronously"""
         loop = asyncio.get_event_loop()
-        
+
         with ThreadPoolExecutor() as executor:
             result = await loop.run_in_executor(
                 executor,
-                self.execute,
-                inputs
+                lambda: self.execute(inputs)
             )
-        
+
         return result
     
     def validate_crew(self) -> bool:

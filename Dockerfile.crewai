@@ -28,6 +28,10 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 COPY main.py .
 COPY config/ ./config/
 COPY agents/ ./agents/
+COPY tasks/ ./tasks/
+COPY crews/ ./crews/
+COPY tools/ ./tools/
+COPY retraining/ ./retraining/
 COPY scripts/ ./scripts/
 RUN mkdir -p /app/data /app/logs /app/tmp && \
     chown -R crewai:crewai /app && \
@@ -44,6 +48,10 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 COPY main.py .
 COPY config/ ./config/
 COPY agents/ ./agents/
+COPY tasks/ ./tasks/
+COPY crews/ ./crews/
+COPY tools/ ./tools/
+COPY retraining/ ./retraining/
 COPY scripts/ ./scripts/
 RUN mkdir -p /app/data /app/logs /app/tmp && \
     chown -R crewai:crewai /app && \

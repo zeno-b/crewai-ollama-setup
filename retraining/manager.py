@@ -156,9 +156,11 @@ class RetrainingJobManager:
         self.jobs_dir = self.base_dir / "jobs"
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self.metrics = metrics or {}
-        self._lock = asyncio.Lock()
 
     def _job_dir(self, job_id: str) -> Path:
+        # Reject job_id values that could cause path traversal
+        if not job_id or "/" in job_id or "\\" in job_id or ".." in job_id:
+            raise ValueError(f"Invalid job_id: {job_id!r}")
         path = self.jobs_dir / job_id
         path.mkdir(parents=True, exist_ok=True)
         return path

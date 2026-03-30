@@ -5,9 +5,9 @@ import requests
 import json
 import os
 import logging
-from datetime import datetime
 import subprocess
 import re
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -47,23 +47,30 @@ class FileReadInput(BaseModel):
     file_path: str = Field(..., description="Path to the file to read")
     encoding: str = Field(default="utf-8", description="File encoding")
 
+_ALLOWED_READ_DIR = os.path.abspath(os.getenv("TOOL_DATA_DIR", "data"))
+
+
 class FileReadTool(BaseTool):
     """Custom file reading tool"""
     name: str = "File Reader"
     description: str = "Read content from a file"
     args_schema: Type[BaseModel] = FileReadInput
-    
+
     def _run(self, file_path: str, encoding: str = "utf-8") -> str:
         """Read file content"""
         try:
-            if not os.path.exists(file_path):
+            resolved = os.path.realpath(os.path.abspath(file_path))
+            if not resolved.startswith(_ALLOWED_READ_DIR + os.sep) and resolved != _ALLOWED_READ_DIR:
+                return f"Error: Access denied: path outside allowed directory"
+
+            if not os.path.exists(resolved):
                 return f"Error: File not found: {file_path}"
-            
-            with open(file_path, 'r', encoding=encoding) as f:
+
+            with open(resolved, 'r', encoding=encoding) as f:
                 content = f.read()
-            
+
             return content
-            
+
         except Exception as e:
             logger.error(f"File read failed: {str(e)}")
             return f"Error: {str(e)}"
@@ -74,23 +81,29 @@ class FileWriteInput(BaseModel):
     content: str = Field(..., description="Content to write")
     encoding: str = Field(default="utf-8", description="File encoding")
 
+_ALLOWED_WRITE_DIR = os.path.abspath(os.getenv("TOOL_DATA_DIR", "data"))
+
+
 class FileWriteTool(BaseTool):
     """Custom file writing tool"""
     name: str = "File Writer"
     description: str = "Write content to a file"
     args_schema: Type[BaseModel] = FileWriteInput
-    
+
     def _run(self, file_path: str, content: str, encoding: str = "utf-8") -> str:
         """Write content to file"""
         try:
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            
-            with open(file_path, 'w', encoding=encoding) as f:
+            resolved = os.path.realpath(os.path.abspath(file_path))
+            if not resolved.startswith(_ALLOWED_WRITE_DIR + os.sep) and resolved != _ALLOWED_WRITE_DIR:
+                return f"Error: Access denied: path outside allowed directory"
+
+            os.makedirs(os.path.dirname(resolved), exist_ok=True)
+
+            with open(resolved, 'w', encoding=encoding) as f:
                 f.write(content)
-            
+
             return f"Successfully wrote to file: {file_path}"
-            
+
         except Exception as e:
             logger.error(f"File write failed: {str(e)}")
             return f"Error: {str(e)}"
@@ -109,37 +122,38 @@ class CodeExecuteTool(BaseTool):
     
     def _run(self, code: str, language: str = "python", timeout: int = 30) -> str:
         """Execute code"""
+        if language.lower() != "python":
+            return "Error: Only Python is currently supported"
+
+        temp_file = None
         try:
-            if language.lower() != "python":
-                return f"Error: Only Python is currently supported"
-            
-            # Create temporary file
-            temp_file = f"/tmp/code_execute_{datetime.now().timestamp()}.py"
-            
-            with open(temp_file, 'w') as f:
+            # Use a securely-named temp file to avoid predictable paths
+            with tempfile.NamedTemporaryFile(
+                mode='w', suffix='.py', delete=False, dir=tempfile.gettempdir()
+            ) as f:
+                temp_file = f.name
                 f.write(code)
-            
-            # Execute code
+
             result = subprocess.run(
                 ["python", temp_file],
                 capture_output=True,
                 text=True,
                 timeout=timeout
             )
-            
-            # Clean up
-            os.remove(temp_file)
-            
+
             if result.returncode == 0:
                 return result.stdout
             else:
                 return f"Error: {result.stderr}"
-                
+
         except subprocess.TimeoutExpired:
             return f"Error: Code execution timed out after {timeout} seconds"
         except Exception as e:
             logger.error(f"Code execution failed: {str(e)}")
             return f"Error: {str(e)}"
+        finally:
+            if temp_file and os.path.exists(temp_file):
+                os.remove(temp_file)
 
 class APIRequestInput(BaseModel):
     """Input schema for API request tool"""
