@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import re
-import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
@@ -10,6 +9,8 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import httpx
+
+from retraining.planner import TrainingPlanner
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,7 @@ class RetrainingJobManager:
         self.jobs_dir = self.base_dir / "jobs"
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self.metrics = metrics or {}
+        self._planner = TrainingPlanner()
 
     def _job_dir(self, job_id: str) -> Path:
         # Reject job_id values that could cause path traversal
@@ -257,14 +259,54 @@ class RetrainingJobManager:
         try:
             await self._update_job_status(job_id, "running", message="Retraining started.")
             self._increment_metric("counter", status="running")
+
             dataset = await asyncio.to_thread(
                 self.dataset_manager.get_dataset,
                 payload["dataset_name"],
                 True,
             )
             dataset_content = dataset.get("content", "")
-            modelfile = self._render_modelfile(payload, dataset_content)
+            dataset_fmt = dataset.get("format", "text")
 
+            # --- planning phase ---
+            if payload.get("auto_plan", True) and not payload.get("modelfile_template"):
+                await self._update_job_status(job_id, "planning", message="Analysing dataset and building training plan.")
+                await self._append_log(job_id, {"event": "planning.started"})
+
+                training_plan, strategy, _ = await asyncio.to_thread(
+                    self._planner.plan, dataset_content, dataset_fmt, payload
+                )
+
+                # Persist plan alongside the job record
+                job_dir = self._job_dir(job_id)
+                plan_path = job_dir / "plan.json"
+                await asyncio.to_thread(
+                    self._write_json, plan_path, training_plan.model_dump()
+                )
+
+                # Promote recommended parameters into the payload so they flow
+                # through to the Modelfile, but don't override explicit caller params
+                merged_params = dict(training_plan.recommended_parameters)
+                merged_params.update(payload.get("parameters") or {})
+                payload = {**payload, "parameters": merged_params}
+
+                await self._append_log(job_id, {
+                    "event": "planning.completed",
+                    "strategy": training_plan.strategy_name,
+                    "rationale": training_plan.rationale,
+                    "estimated_tokens": training_plan.estimated_tokens,
+                    "plan_path": str(plan_path),
+                })
+
+                instructions = payload.get("instructions") or ""
+                modelfile = strategy.render_modelfile(
+                    payload["base_model"], dataset_content, instructions, merged_params
+                )
+            else:
+                # Caller supplied a raw modelfile_template — use it directly
+                modelfile = self._render_raw_template(payload, dataset_content)
+
+            # --- modelfile write ---
             job_dir = self._job_dir(job_id)
             modelfile_path = job_dir / "Modelfile"
             await asyncio.to_thread(modelfile_path.write_text, modelfile, "utf-8")
@@ -273,6 +315,7 @@ class RetrainingJobManager:
             await self._call_ollama_create(job_id, payload, modelfile, timeout)
             await self._update_job_status(job_id, "completed", message="Retraining complete.")
             self._increment_metric("counter", status="completed")
+
         except Exception as exc:
             logger.exception("Retraining job %s failed: %s", job_id, exc)
             await self._update_job_status(job_id, "failed", message=str(exc))
@@ -281,33 +324,18 @@ class RetrainingJobManager:
             duration = (datetime.utcnow() - start).total_seconds()
             self._observe_duration(duration)
 
-    def _render_modelfile(self, payload: Dict[str, Any], dataset_content: str) -> str:
-        template = payload.get("modelfile_template")
-        if template:
-            return template.replace("{{DATASET}}", dataset_content)
+    @staticmethod
+    def _render_raw_template(payload: Dict[str, Any], dataset_content: str) -> str:
+        """Render a caller-supplied Modelfile template verbatim."""
+        template = payload.get("modelfile_template", "")
+        return template.replace("{{DATASET}}", dataset_content)
 
-        instructions = payload.get("instructions") or "Incorporate the domain knowledge below when answering."
-        sanitized_dataset = dataset_content.replace('"""', r'\"\"\"')
-        if len(sanitized_dataset) > MAX_DATASET_CHARS:
-            raise ValueError(
-                "Dataset content is too large for the default template. "
-                "Provide a custom modelfile_template with {{DATASET}} placeholder."
-            )
-
-        parameters = payload.get("parameters") or {}
-        lines = [
-            f"FROM {payload['base_model']}",
-            "",
-            'SYSTEM """',
-            textwrap.dedent(instructions).strip(),
-            "",
-            sanitized_dataset.strip(),
-            '"""',
-        ]
-        for key, value in parameters.items():
-            lines.append(f"PARAMETER {key} {value}")
-
-        return "\n".join(lines)
+    async def get_plan(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Return the training plan for a job, or None if not yet generated."""
+        plan_path = self._job_dir(job_id) / "plan.json"
+        if not plan_path.exists():
+            return None
+        return await asyncio.to_thread(self._read_json, plan_path)
 
     async def _call_ollama_create(
         self,
