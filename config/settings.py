@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="your-secret-key-change-this")
     algorithm: str = Field(default="HS256")
     access_token_expire_minutes: int = Field(default=30)
+    admin_username: str = Field(default="admin")
+    admin_password: str = Field(default="changeme")
+
+    # CORS Settings
+    cors_origins: str = Field(default="http://localhost:3000")
 
     # Logging Settings
     log_level: str = Field(default="INFO")

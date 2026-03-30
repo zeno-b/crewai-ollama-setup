@@ -5,9 +5,7 @@ import requests
 import json
 import os
 import logging
-import subprocess
 import re
-import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -108,52 +106,6 @@ class FileWriteTool(BaseTool):
             logger.error(f"File write failed: {str(e)}")
             return f"Error: {str(e)}"
 
-class CodeExecuteInput(BaseModel):
-    """Input schema for code execution tool"""
-    code: str = Field(..., description="Code to execute")
-    language: str = Field(default="python", description="Programming language")
-    timeout: int = Field(default=30, description="Execution timeout in seconds")
-
-class CodeExecuteTool(BaseTool):
-    """Custom code execution tool"""
-    name: str = "Code Executor"
-    description: str = "Execute code in a safe environment"
-    args_schema: Type[BaseModel] = CodeExecuteInput
-    
-    def _run(self, code: str, language: str = "python", timeout: int = 30) -> str:
-        """Execute code"""
-        if language.lower() != "python":
-            return "Error: Only Python is currently supported"
-
-        temp_file = None
-        try:
-            # Use a securely-named temp file to avoid predictable paths
-            with tempfile.NamedTemporaryFile(
-                mode='w', suffix='.py', delete=False, dir=tempfile.gettempdir()
-            ) as f:
-                temp_file = f.name
-                f.write(code)
-
-            result = subprocess.run(
-                ["python", temp_file],
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
-
-            if result.returncode == 0:
-                return result.stdout
-            else:
-                return f"Error: {result.stderr}"
-
-        except subprocess.TimeoutExpired:
-            return f"Error: Code execution timed out after {timeout} seconds"
-        except Exception as e:
-            logger.error(f"Code execution failed: {str(e)}")
-            return f"Error: {str(e)}"
-        finally:
-            if temp_file and os.path.exists(temp_file):
-                os.remove(temp_file)
 
 class APIRequestInput(BaseModel):
     """Input schema for API request tool"""
@@ -253,7 +205,6 @@ class ToolFactory:
             WebSearchTool(),
             FileReadTool(),
             FileWriteTool(),
-            CodeExecuteTool(),
             APIRequestTool(),
             DataAnalysisTool()
         ]
@@ -275,7 +226,6 @@ class ToolFactory:
         categories = {
             "web": [WebSearchTool()],
             "file": [FileReadTool(), FileWriteTool()],
-            "code": [CodeExecuteTool()],
             "api": [APIRequestTool()],
             "data": [DataAnalysisTool()]
         }

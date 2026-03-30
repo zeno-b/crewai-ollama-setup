@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 import json
 import asyncio
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
 from agents.custom_agent import CustomAgent, AgentFactory
@@ -49,8 +50,8 @@ class CustomCrew:
         # Create the actual CrewAI crew
         self.crew = self._create_crew()
         
-        # Execution tracking
-        self.execution_history = []
+        # Execution tracking (capped to avoid unbounded memory growth)
+        self.execution_history: deque = deque(maxlen=100)
         self.current_execution = None
     
     def _create_crew(self) -> Crew:
@@ -80,7 +81,7 @@ class CustomCrew:
             "verbose": self.verbose,
             "cache": self.cache,
             "max_rpm": self.max_rpm,
-            "execution_history": self.execution_history
+            "execution_history": list(self.execution_history)
         }
     
     def add_agent(self, agent: CustomAgent) -> None:
@@ -211,7 +212,7 @@ class CustomCrew:
     
     def get_execution_history(self) -> List[Dict[str, Any]]:
         """Get execution history"""
-        return self.execution_history
+        return list(self.execution_history)
     
     def export_execution_history(self, file_path: str) -> bool:
         """Export execution history to JSON file"""

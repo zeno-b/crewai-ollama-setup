@@ -6,18 +6,21 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 import uvicorn
 from prometheus_client import Counter, Histogram, generate_latest
 from prometheus_client.openmetrics.exposition import CONTENT_TYPE_LATEST
 from fastapi.responses import PlainTextResponse
+from jose import JWTError, jwt
+from passlib.context import CryptContext
 
 from crewai import Agent, Task, Crew
 from langchain_community.llms import Ollama
+import httpx
 import redis.asyncio as redis
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from uuid import uuid4
 import time
@@ -111,10 +114,10 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",")],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 @app.middleware("http")
@@ -134,6 +137,8 @@ async def metrics_middleware(request: Request, call_next):
 
 # Security
 security = HTTPBearer()
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Pydantic models
 class AgentConfig(BaseModel):
@@ -227,10 +232,38 @@ class RetrainingJobLogsResponse(BaseModel):
     job_id: str
     logs: List[Dict[str, Any]]
 
-# Dependency to get current user (placeholder)
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    # Implement your authentication logic here
-    return {"user_id": "default_user"}
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    """Validate Bearer JWT and return the token payload."""
+    exc = HTTPException(status_code=401, detail="Invalid or expired token",
+                        headers={"WWW-Authenticate": "Bearer"})
+    try:
+        payload = jwt.decode(
+            credentials.credentials,
+            settings.secret_key,
+            algorithms=[settings.algorithm],
+        )
+        user_id: str = payload.get("sub")
+        if not user_id:
+            raise exc
+    except JWTError:
+        raise exc
+    return {"user_id": user_id}
+
+
+@app.post("/token")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    """Issue a JWT for valid admin credentials."""
+    if form_data.username != settings.admin_username or \
+            not pwd_context.verify(form_data.password, pwd_context.hash(settings.admin_password)):
+        raise HTTPException(status_code=401, detail="Incorrect username or password",
+                            headers={"WWW-Authenticate": "Bearer"})
+    expire = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)
+    token = jwt.encode(
+        {"sub": form_data.username, "exp": expire},
+        settings.secret_key,
+        algorithm=settings.algorithm,
+    )
+    return {"access_token": token, "token_type": "bearer"}
 
 # Health check endpoint
 @app.get("/health", response_model=HealthResponse)
@@ -265,20 +298,25 @@ async def metrics():
 
 # List available models
 @app.get("/models", response_model=ModelsResponse)
-async def list_models():
+async def list_models(_user: dict = Depends(get_current_user)):
     """List available Ollama models"""
     if not ollama_llm:
         raise HTTPException(status_code=503, detail="Ollama not connected")
-    
+
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     try:
-        # This is a placeholder - implement actual Ollama model listing
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{ollama_base_url}/api/tags")
+            resp.raise_for_status()
+            data = resp.json()
         models = [
             ModelInfo(
-                name="llama2:7b",
-                size=3825819519,
-                digest="fe938a131f40e6f6d40083c9f0f430a515233eb2edaa6d72eb85c50d64f2300e",
-                modified_at="2024-01-01T00:00:00Z"
+                name=m["name"],
+                size=m.get("size", 0),
+                digest=m.get("digest", ""),
+                modified_at=m.get("modified_at", ""),
             )
+            for m in data.get("models", [])
         ]
         return ModelsResponse(models=models)
     except Exception as e:
@@ -286,7 +324,7 @@ async def list_models():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/datasets", response_model=DatasetInfo, status_code=201)
-async def create_dataset(dataset: DatasetCreateRequest):
+async def create_dataset(dataset: DatasetCreateRequest, _user: dict = Depends(get_current_user)):
     """Create or replace a training dataset."""
     if not dataset_manager:
         raise HTTPException(status_code=503, detail="Dataset manager not initialized")
@@ -309,7 +347,7 @@ async def create_dataset(dataset: DatasetCreateRequest):
         raise HTTPException(status_code=500, detail="Failed to save dataset")
 
 @app.get("/datasets", response_model=DatasetListResponse)
-async def list_datasets():
+async def list_datasets(_user: dict = Depends(get_current_user)):
     """List available training datasets."""
     if not dataset_manager:
         raise HTTPException(status_code=503, detail="Dataset manager not initialized")
@@ -319,7 +357,7 @@ async def list_datasets():
     return DatasetListResponse(datasets=datasets)
 
 @app.get("/datasets/{dataset_name}", response_model=DatasetDetail)
-async def get_dataset(dataset_name: str, include_content: bool = False):
+async def get_dataset(dataset_name: str, include_content: bool = False, _user: dict = Depends(get_current_user)):
     """Retrieve dataset metadata (and optionally content)."""
     if not dataset_manager:
         raise HTTPException(status_code=503, detail="Dataset manager not initialized")
@@ -331,7 +369,7 @@ async def get_dataset(dataset_name: str, include_content: bool = False):
         raise HTTPException(status_code=404, detail=str(exc))
 
 @app.delete("/datasets/{dataset_name}")
-async def delete_dataset(dataset_name: str):
+async def delete_dataset(dataset_name: str, _user: dict = Depends(get_current_user)):
     """Delete a dataset."""
     if not dataset_manager:
         raise HTTPException(status_code=503, detail="Dataset manager not initialized")
@@ -343,7 +381,7 @@ async def delete_dataset(dataset_name: str):
         raise HTTPException(status_code=404, detail=str(exc))
 
 @app.post("/retraining/jobs", response_model=RetrainingJobStatus, status_code=202)
-async def create_retraining_job(job_request: RetrainingJobRequest):
+async def create_retraining_job(job_request: RetrainingJobRequest, _user: dict = Depends(get_current_user)):
     """Schedule a new retraining job."""
     if not retraining_manager or not dataset_manager:
         raise HTTPException(status_code=503, detail="Retraining components not initialized")
@@ -368,7 +406,7 @@ async def create_retraining_job(job_request: RetrainingJobRequest):
     return RetrainingJobStatus(**job_record)
 
 @app.get("/retraining/jobs", response_model=RetrainingJobListResponse)
-async def list_retraining_jobs(limit: int = 50):
+async def list_retraining_jobs(limit: int = 50, _user: dict = Depends(get_current_user)):
     """List retraining jobs."""
     if not retraining_manager:
         raise HTTPException(status_code=503, detail="Retraining components not initialized")
@@ -378,7 +416,7 @@ async def list_retraining_jobs(limit: int = 50):
     return RetrainingJobListResponse(jobs=jobs)
 
 @app.get("/retraining/jobs/{job_id}", response_model=RetrainingJobStatus)
-async def get_retraining_job(job_id: str):
+async def get_retraining_job(job_id: str, _user: dict = Depends(get_current_user)):
     """Get retraining job status."""
     if not retraining_manager:
         raise HTTPException(status_code=503, detail="Retraining components not initialized")
@@ -390,7 +428,7 @@ async def get_retraining_job(job_id: str):
         raise HTTPException(status_code=404, detail=str(exc))
 
 @app.get("/retraining/jobs/{job_id}/logs", response_model=RetrainingJobLogsResponse)
-async def get_retraining_logs(job_id: str, tail: int = 100):
+async def get_retraining_logs(job_id: str, tail: int = 100, _user: dict = Depends(get_current_user)):
     """Retrieve retraining job logs."""
     if not retraining_manager:
         raise HTTPException(status_code=503, detail="Retraining components not initialized")
@@ -400,7 +438,7 @@ async def get_retraining_logs(job_id: str, tail: int = 100):
 
 # Create agent endpoint
 @app.post("/create_agent")
-async def create_agent(agent_config: AgentConfig):
+async def create_agent(agent_config: AgentConfig, _user: dict = Depends(get_current_user)):
     """Create a new agent"""
     if not ollama_llm:
         raise HTTPException(status_code=503, detail="Ollama not connected")
@@ -441,7 +479,7 @@ async def create_agent(agent_config: AgentConfig):
 
 # Run crew endpoint
 @app.post("/run_crew")
-async def run_crew(crew_config: CrewConfig, background_tasks: BackgroundTasks):
+async def run_crew(crew_config: CrewConfig, background_tasks: BackgroundTasks, _user: dict = Depends(get_current_user)):
     """Run a crew with specified agents and tasks"""
     if not ollama_llm:
         raise HTTPException(status_code=503, detail="Ollama not connected")
@@ -519,7 +557,7 @@ async def run_crew_async(crew: Crew, crew_config: CrewConfig, crew_id: str):
 
 # Get crew results
 @app.get("/crew_results/{crew_id}")
-async def get_crew_result(crew_id: str):
+async def get_crew_result(crew_id: str, _user: dict = Depends(get_current_user)):
     """Get crew execution results"""
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis not available")
