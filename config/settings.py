@@ -1,6 +1,11 @@
 import os
 from typing import Optional
-from pydantic import BaseSettings, Field
+from pydantic import Field
+
+try:
+    from pydantic_settings import BaseSettings
+except ImportError:  # pragma: no cover - compatibility for legacy environments
+    from pydantic.v1 import BaseSettings
 
 class Settings(BaseSettings):
     """Application settings"""
