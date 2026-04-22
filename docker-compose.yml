@@ -19,6 +19,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -27,8 +29,6 @@ services:
         reservations:
           memory: 2G
           cpus: '1.0'
-      security_opt:
-        - no-new-privileges:true
 
   crewai:
     build:
