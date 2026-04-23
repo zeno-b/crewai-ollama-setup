@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional, Literal
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
@@ -21,6 +21,10 @@ from datetime import datetime
 import json
 from uuid import uuid4
 import time
+import re
+
+_JOB_ID_PATTERN = re.compile(r"^job_[0-9a-f]{8,64}$", re.IGNORECASE)
+_CREW_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 
 from config.settings import settings
 from retraining.manager import DatasetManager, RetrainingJobManager
@@ -243,7 +247,8 @@ async def health_check():
         try:
             await redis_client.ping()
             redis_status = True
-        except:
+        except Exception as exc:
+            logger.warning("Redis ping failed during health check: %s", exc)
             redis_status = False
     
     return HealthResponse(
@@ -327,6 +332,8 @@ async def get_dataset(dataset_name: str, include_content: bool = False):
     try:
         record = await asyncio.to_thread(dataset_manager.get_dataset, dataset_name, include_content)
         return DatasetDetail(**record)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -339,6 +346,8 @@ async def delete_dataset(dataset_name: str):
     try:
         await asyncio.to_thread(dataset_manager.delete_dataset, dataset_name)
         return {"message": f"Dataset '{dataset_name}' deleted"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -351,6 +360,8 @@ async def create_retraining_job(job_request: RetrainingJobRequest):
     # Ensure dataset exists before scheduling the job
     try:
         await asyncio.to_thread(dataset_manager.get_dataset, job_request.dataset_name, False)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     
@@ -368,7 +379,7 @@ async def create_retraining_job(job_request: RetrainingJobRequest):
     return RetrainingJobStatus(**job_record)
 
 @app.get("/retraining/jobs", response_model=RetrainingJobListResponse)
-async def list_retraining_jobs(limit: int = 50):
+async def list_retraining_jobs(limit: int = Query(50, ge=1, le=500)):
     """List retraining jobs."""
     if not retraining_manager:
         raise HTTPException(status_code=503, detail="Retraining components not initialized")
@@ -382,6 +393,8 @@ async def get_retraining_job(job_id: str):
     """Get retraining job status."""
     if not retraining_manager:
         raise HTTPException(status_code=503, detail="Retraining components not initialized")
+    if not _JOB_ID_PATTERN.match(job_id):
+        raise HTTPException(status_code=400, detail="Invalid job id")
     
     try:
         record = await retraining_manager.get_job(job_id)
@@ -390,10 +403,12 @@ async def get_retraining_job(job_id: str):
         raise HTTPException(status_code=404, detail=str(exc))
 
 @app.get("/retraining/jobs/{job_id}/logs", response_model=RetrainingJobLogsResponse)
-async def get_retraining_logs(job_id: str, tail: int = 100):
+async def get_retraining_logs(job_id: str, tail: int = Query(100, ge=1, le=10_000)):
     """Retrieve retraining job logs."""
     if not retraining_manager:
         raise HTTPException(status_code=503, detail="Retraining components not initialized")
+    if not _JOB_ID_PATTERN.match(job_id):
+        raise HTTPException(status_code=400, detail="Invalid job id")
     
     logs = await retraining_manager.get_logs(job_id, tail)
     return RetrainingJobLogsResponse(job_id=job_id, logs=logs)
@@ -490,7 +505,9 @@ async def run_crew(crew_config: CrewConfig, background_tasks: BackgroundTasks):
         logger.info(f"Started crew execution with {len(agents)} agents and {len(tasks)} tasks")
         
         return {"message": "Crew execution started", "crew_id": crew_id}
-    
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error running crew: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -523,17 +540,24 @@ async def get_crew_result(crew_id: str):
     """Get crew execution results"""
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis not available")
+    if not _CREW_ID_PATTERN.match(crew_id):
+        raise HTTPException(status_code=400, detail="Invalid crew id")
     
     try:
         result = await redis_client.get(f"crew_result:{crew_id}")
         if not result:
             raise HTTPException(status_code=404, detail="Crew result not found")
-        
+
         return json.loads(result)
-        
-    except Exception as e:
-        logger.error(f"Error retrieving crew result: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+
+    except HTTPException:
+        raise
+    except json.JSONDecodeError as exc:
+        logger.error("Invalid JSON in crew result for %s: %s", crew_id, exc)
+        raise HTTPException(status_code=500, detail="Invalid stored crew result")
+    except Exception as exc:
+        logger.error("Error retrieving crew result: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 # Root endpoint
 @app.get("/")

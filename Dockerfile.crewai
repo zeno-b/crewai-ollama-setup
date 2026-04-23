@@ -26,6 +26,23 @@ FROM base AS requirements-verify
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Run pytest in the same image stack as the service (no host Python).
+FROM base AS tests
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY main.py .
+COPY config/ ./config/
+COPY agents/ ./agents/
+COPY retraining/ ./retraining/
+COPY pytest.ini .
+COPY tests/ ./tests/
+ENV ENVIRONMENT=testing \
+    DATASET_DIR=/tmp/crewai-test-datasets \
+    RETRAINING_DIR=/tmp/crewai-test-retraining \
+    OLLAMA_BASE_URL=http://127.0.0.1:9 \
+    REDIS_URL=redis://127.0.0.1:9/0
+RUN pytest tests/ -v --tb=short
+
 # Development stage
 FROM base AS development
 COPY requirements.txt .
@@ -34,6 +51,7 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 COPY main.py .
 COPY config/ ./config/
 COPY agents/ ./agents/
+COPY retraining/ ./retraining/
 COPY scripts/ ./scripts/
 RUN mkdir -p /app/data /app/logs /app/tmp && \
     chown -R crewai:crewai /app && \
@@ -50,6 +68,7 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 COPY main.py .
 COPY config/ ./config/
 COPY agents/ ./agents/
+COPY retraining/ ./retraining/
 COPY scripts/ ./scripts/
 RUN mkdir -p /app/data /app/logs /app/tmp && \
     chown -R crewai:crewai /app && \

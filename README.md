@@ -58,6 +58,25 @@ docker-compose up -d
 curl http://localhost:11434/api/tags
 ```
 
+### Testing
+
+Run the suite on the host (Python 3.11+ recommended to match the container):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pytest tests/ -v
+```
+
+Run the same tests **inside** the `python:3.11-slim` image used by the service (fully containerized):
+
+```bash
+./scripts/run-tests-docker.sh
+```
+
+Performance smoke checks are marked `@pytest.mark.performance`; security checks use `@pytest.mark.security`. Skip performance tests with `pytest tests/ -m "not performance"`.
+
 ### Configuration
 
 Edit `config/settings.py` to customize:
