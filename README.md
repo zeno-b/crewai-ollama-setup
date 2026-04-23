@@ -42,12 +42,18 @@ git clone <repository-url>
 cd crewai-ollama-setup
 ```
 
-2. Start the services:
+2. (Optional) Confirm `requirements.txt` resolves in the same image stack as the CrewAI container (no host Python needed):
+
+```bash
+./scripts/verify-requirements.sh
+```
+
+3. Start the services:
 ```bash
 docker-compose up -d
 ```
 
-3. Verify Ollama is running:
+4. Verify Ollama is running:
 ```bash
 curl http://localhost:11434/api/tags
 ```

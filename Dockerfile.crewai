@@ -20,6 +20,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /app
 
+# Resolve-only check: same base image and pip as development/production.
+# Run locally: docker build -f Dockerfile.crewai --target requirements-verify .
+FROM base AS requirements-verify
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
 # Development stage
 FROM base AS development
 COPY requirements.txt .
