@@ -45,13 +45,20 @@ services:
       - ./config:/app/config
       - ./agents:/app/agents
     environment:
+      - ENVIRONMENT=${ENVIRONMENT:-production}
       - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama2:7b}
       - CREWAI_PORT=8000
       - CREWAI_LOG_LEVEL=INFO
       - DATABASE_URL=sqlite:///./data/crewai.db
       - REDIS_URL=redis://redis:6379
-      - SECRET_KEY=${SECRET_KEY:-default-secret-key}
-      - JWT_SECRET=${JWT_SECRET:-default-jwt-secret}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env for a strong random value}
+      - API_BEARER_TOKEN=${API_BEARER_TOKEN:-}
+      - METRICS_BEARER_TOKEN=${METRICS_BEARER_TOKEN:-}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      - DATASET_MAX_CONTENT_BYTES=${DATASET_MAX_CONTENT_BYTES:-5242880}
+      - MODELFILE_TEMPLATE_DIR=/app/config/modelfiles
       - ENABLE_METRICS=true
       - WORKERS=${CREWAI_WORKERS:-}
       - GUNICORN_TIMEOUT=${CREWAI_TIMEOUT:-90}

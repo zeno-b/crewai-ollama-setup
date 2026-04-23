@@ -40,7 +40,9 @@ ENV ENVIRONMENT=testing \
     DATASET_DIR=/tmp/crewai-test-datasets \
     RETRAINING_DIR=/tmp/crewai-test-retraining \
     OLLAMA_BASE_URL=http://127.0.0.1:9 \
-    REDIS_URL=redis://127.0.0.1:9/0
+    REDIS_URL=redis://127.0.0.1:9/0 \
+    SECRET_KEY=test-dockerfile-secret-key-32chars-min!! \
+    API_BEARER_TOKEN=test-dockerfile-bearer-token
 RUN pytest tests/ -v --tb=short
 
 # Development stage

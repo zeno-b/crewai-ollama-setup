@@ -1,0 +1,12 @@
+# Distillation-style Modelfile fragment (served via template_name=example_distill).
+# {{DATASET}} is expanded from your dataset (JSONL rows become MESSAGE blocks when job_type=distill).
+# {{TEACHER_MODEL}} is the Ollama name of the teacher (also available for custom TEMPLATE logic outside this file).
+
+FROM {{BASE_MODEL}}
+
+# Student sees user turns; assistant turns in {{DATASET}} should match teacher outputs you distilled from.
+
+{{DATASET}}
+
+PARAMETER temperature 0.2
+PARAMETER num_ctx 4096
