@@ -22,6 +22,7 @@ from langchain_community.llms import Ollama
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from pydantic import BaseModel, Field
 
+from automation.news_pipeline import NewsAutopilot, NewsAutopilotConfig
 from config.settings import settings
 from retraining.manager import DatasetManager, RetrainingJobManager
 
@@ -52,6 +53,7 @@ redis_client: Optional[redis.Redis] = None
 ollama_llm: Optional[Ollama] = None
 dataset_manager: Optional[DatasetManager] = None
 retraining_manager: Optional[RetrainingJobManager] = None
+news_autopilot: Optional[NewsAutopilot] = None
 
 optional_bearer = HTTPBearer(auto_error=False)
 
@@ -77,7 +79,7 @@ def _metrics_authorized(request: Request) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global redis_client, ollama_llm, dataset_manager, retraining_manager
+    global redis_client, ollama_llm, dataset_manager, retraining_manager, news_autopilot
 
     logger.info("Starting CrewAI service...")
 
@@ -117,9 +119,61 @@ async def lifespan(app: FastAPI):
         modelfile_template_dir=template_dir if template_dir.is_dir() else None,
     )
 
+    news_autopilot = None
+    if settings.news_autopilot_enabled:
+        if not settings.news_autopilot_rss_url.strip():
+            logger.error(
+                "NEWS_AUTOPILOT_ENABLED but NEWS_AUTOPILOT_RSS_URL is empty; "
+                "autopilot not started",
+            )
+        elif settings.news_autopilot_job_type == "distill" and not (
+            settings.news_autopilot_teacher_model or ""
+        ).strip():
+            logger.error(
+                "NEWS_AUTOPILOT_JOB_TYPE=distill requires NEWS_AUTOPILOT_TEACHER_MODEL; "
+                "autopilot not started",
+            )
+        else:
+            news_autopilot = NewsAutopilot(
+                NewsAutopilotConfig(
+                    enabled=True,
+                    rss_url=settings.news_autopilot_rss_url.strip(),
+                    poll_interval_seconds=settings.news_autopilot_poll_interval_seconds,
+                    request_timeout_seconds=settings.news_autopilot_request_timeout_seconds,
+                    max_items_per_fetch=settings.news_autopilot_max_items,
+                    output_dataset_name=settings.news_autopilot_dataset_name.strip(),
+                    output_format=settings.news_autopilot_output_format,
+                    merge_with_existing=settings.news_autopilot_merge_existing,
+                    max_merged_bytes=min(
+                        settings.news_autopilot_max_merged_bytes,
+                        settings.dataset_max_content_bytes,
+                    ),
+                    min_new_lines_to_retrain=settings.news_autopilot_min_new_lines,
+                    min_new_bytes_to_retrain=settings.news_autopilot_min_new_bytes,
+                    min_hours_between_retrains=settings.news_autopilot_min_hours_between_retrains,
+                    retrain_on_any_change=settings.news_autopilot_retrain_on_any_change,
+                    base_model=settings.news_autopilot_base_model.strip(),
+                    model_name_prefix=settings.news_autopilot_model_name_prefix.strip(),
+                    job_type=settings.news_autopilot_job_type,
+                    teacher_model=(settings.news_autopilot_teacher_model or "").strip() or None,
+                    template_name=(settings.news_autopilot_template_name or "").strip() or None,
+                    instructions=settings.news_autopilot_instructions,
+                    retrain_parameters_json=settings.news_autopilot_retrain_parameters_json,
+                    retrain_timeout_seconds=settings.news_autopilot_retrain_timeout_seconds,
+                    user_agent=settings.news_autopilot_user_agent.strip(),
+                ),
+                dataset_manager,
+                retraining_manager,
+                redis_client,
+            )
+            news_autopilot.start()
+            logger.info("News autopilot started")
+
     yield
 
     logger.info("Shutting down CrewAI service...")
+    if news_autopilot:
+        await news_autopilot.stop()
     if redis_client:
         await redis_client.close()
 
@@ -324,9 +378,18 @@ async def list_models():
             resp = await client.get(url)
             resp.raise_for_status()
             data = resp.json()
-    except httpx.HTTPError as exc:
-        logger.error("Error listing Ollama models: %s", exc)
+    except httpx.RequestError as exc:
+        logger.error("Error reaching Ollama model API: %s", exc)
         raise HTTPException(status_code=502, detail="Failed to reach Ollama model API") from exc
+    except httpx.HTTPStatusError as exc:
+        logger.error("Ollama model API returned error: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail="Ollama model API returned an error status",
+        ) from exc
+    except ValueError as exc:
+        logger.error("Invalid JSON from Ollama model API: %s", exc)
+        raise HTTPException(status_code=502, detail="Invalid JSON from Ollama") from exc
 
     raw_models = data.get("models") if isinstance(data, dict) else None
     if not isinstance(raw_models, list):

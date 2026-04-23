@@ -34,6 +34,7 @@ COPY main.py .
 COPY config/ ./config/
 COPY agents/ ./agents/
 COPY retraining/ ./retraining/
+COPY automation/ ./automation/
 COPY pytest.ini .
 COPY tests/ ./tests/
 ENV ENVIRONMENT=testing \
@@ -54,6 +55,7 @@ COPY main.py .
 COPY config/ ./config/
 COPY agents/ ./agents/
 COPY retraining/ ./retraining/
+COPY automation/ ./automation/
 COPY scripts/ ./scripts/
 RUN mkdir -p /app/data /app/logs /app/tmp && \
     chown -R crewai:crewai /app && \
@@ -71,6 +73,7 @@ COPY main.py .
 COPY config/ ./config/
 COPY agents/ ./agents/
 COPY retraining/ ./retraining/
+COPY automation/ ./automation/
 COPY scripts/ ./scripts/
 RUN mkdir -p /app/data /app/logs /app/tmp && \
     chown -R crewai:crewai /app && \

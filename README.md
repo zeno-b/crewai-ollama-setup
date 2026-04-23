@@ -215,7 +215,8 @@ crewai-ollama-setup/
 | `CORS_ALLOW_ORIGINS` | Comma-separated browser origins, or `*` (blocked when `ENVIRONMENT=production`) | `http://localhost:3000,...` |
 | `DATASET_MAX_CONTENT_BYTES` | Max raw bytes per dataset upload | `5242880` |
 | `MODELFILE_TEMPLATE_DIR` | Directory of `<name>.template` files for `template_name` on jobs | `config/modelfiles` |
-| `REDIS_PASSWORD` | Optional; injected into `REDIS_URL` when host has no credentials | *(unset)* |
+| `REDIS_PASSWORD` | Optional; injected into `REDIS_URL` when the URL has no `@` credentials | *(unset)* |
+| `NEWS_AUTOPILOT_*` | Background RSS ingestion and auto-retrain policy | see `.env.example` |
 
 ### Performance Tuning
 
@@ -241,6 +242,35 @@ docker compose --profile monitoring up -d
 > Start the core services first (`docker compose up -d`) and only then enable the monitoring profile. You can later stop the dashboards without touching the app via `docker compose --profile monitoring down`.
 
 Grafana provides a pre-built **CrewAI Overview** dashboard and connects automatically to Prometheus. Default credentials are `admin / ${GRAFANA_PASSWORD:-admin}`.
+
+### Compose scenario overlays
+
+The `compose/` directory holds **optional merge files** for common setups (see `compose/README.md`):
+
+- **Redis password — option A**: `REDIS_URL` without credentials + `REDIS_PASSWORD` (app merges password into the DSN).
+- **Redis password — option B**: `REDIS_URL` with embedded `redis://:pass@redis:6379/0` + same `REDIS_PASSWORD` for the Redis server only (`REDIS_PASSWORD` cleared for `crewai` so the URL is not double-encoded).
+- **News autopilot**: toggles `NEWS_AUTOPILOT_*` variables on the `crewai` service.
+
+Example:
+
+```bash
+docker compose -f docker-compose.yml \
+  -f compose/docker-compose.redis-password-option-a.yml \
+  -f compose/docker-compose.scenario.news-autopilot.yml \
+  up -d
+```
+
+### Autonomous news → training data → retrain
+
+When `NEWS_AUTOPILOT_ENABLED=true`, the API process periodically downloads an RSS/Atom feed, normalizes headlines into **`NEWS_AUTOPILOT_DATASET_NAME`** (`text` or `jsonl`), optionally merges with the existing corpus, and **schedules an Ollama retraining job** when configurable deltas (`NEWS_AUTOPILOT_MIN_NEW_LINES_TO_RETRAIN`, `NEWS_AUTOPILOT_MIN_NEW_BYTES_TO_RETRAIN`, or `NEWS_AUTOPILOT_RETRAIN_ON_ANY_CHANGE`) and `NEWS_AUTOPILOT_MIN_HOURS_BETWEEN_RETRAINS` allow it. State (last digest, sizes, last retrain time) is stored in Redis when available.
+
+| Variable | Role |
+|----------|------|
+| `NEWS_AUTOPILOT_RSS_URL` | Feed to poll |
+| `NEWS_AUTOPILOT_POLL_INTERVAL_SECONDS` | Sleep between attempts |
+| `NEWS_AUTOPILOT_OUTPUT_FORMAT` | `text` (SYSTEM-friendly) or `jsonl` (pairs for `distill`) |
+| `NEWS_AUTOPILOT_MIN_*` | Heuristics for “enough new data” before retrain |
+| `NEWS_AUTOPILOT_JOB_TYPE` | `system_prompt` or `distill` (distill requires `NEWS_AUTOPILOT_TEACHER_MODEL`) |
 
 ## Retraining Workflow
 

@@ -110,6 +110,106 @@ class Settings(BaseSettings):
         description="Directory of reusable Modelfile templates (optional).",
     )
 
+    # News → dataset → auto-retrain (background task inside the API process)
+    news_autopilot_enabled: bool = Field(default=False, validation_alias="NEWS_AUTOPILOT_ENABLED")
+    news_autopilot_rss_url: str = Field(
+        default="https://feeds.bbci.co.uk/news/rss.xml",
+        validation_alias="NEWS_AUTOPILOT_RSS_URL",
+    )
+    news_autopilot_poll_interval_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        validation_alias="NEWS_AUTOPILOT_POLL_INTERVAL_SECONDS",
+    )
+    news_autopilot_request_timeout_seconds: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=120.0,
+        validation_alias="NEWS_AUTOPILOT_REQUEST_TIMEOUT_SECONDS",
+    )
+    news_autopilot_max_items: int = Field(
+        default=25,
+        ge=1,
+        le=200,
+        validation_alias="NEWS_AUTOPILOT_MAX_ITEMS",
+    )
+    news_autopilot_dataset_name: str = Field(
+        default="news_autopilot_corpus",
+        validation_alias="NEWS_AUTOPILOT_DATASET_NAME",
+    )
+    news_autopilot_output_format: str = Field(
+        default="text",
+        validation_alias="NEWS_AUTOPILOT_OUTPUT_FORMAT",
+        description="text or jsonl (jsonl pairs well with job_type=distill).",
+    )
+    news_autopilot_merge_existing: bool = Field(
+        default=True,
+        validation_alias="NEWS_AUTOPILOT_MERGE_EXISTING",
+    )
+    news_autopilot_max_merged_bytes: int = Field(
+        default=4_000_000,
+        ge=10_000,
+        validation_alias="NEWS_AUTOPILOT_MAX_MERGED_BYTES",
+    )
+    news_autopilot_min_new_lines: int = Field(
+        default=50,
+        ge=0,
+        validation_alias="NEWS_AUTOPILOT_MIN_NEW_LINES_TO_RETRAIN",
+    )
+    news_autopilot_min_new_bytes: int = Field(
+        default=8000,
+        ge=0,
+        validation_alias="NEWS_AUTOPILOT_MIN_NEW_BYTES_TO_RETRAIN",
+    )
+    news_autopilot_min_hours_between_retrains: float = Field(
+        default=24.0,
+        ge=0.0,
+        validation_alias="NEWS_AUTOPILOT_MIN_HOURS_BETWEEN_RETRAINS",
+    )
+    news_autopilot_retrain_on_any_change: bool = Field(
+        default=False,
+        validation_alias="NEWS_AUTOPILOT_RETRAIN_ON_ANY_CHANGE",
+    )
+    news_autopilot_base_model: str = Field(
+        default="llama2:7b",
+        validation_alias="NEWS_AUTOPILOT_BASE_MODEL",
+    )
+    news_autopilot_model_name_prefix: str = Field(
+        default="news-autopilot",
+        validation_alias="NEWS_AUTOPILOT_MODEL_NAME_PREFIX",
+    )
+    news_autopilot_job_type: str = Field(
+        default="system_prompt",
+        validation_alias="NEWS_AUTOPILOT_JOB_TYPE",
+    )
+    news_autopilot_teacher_model: Optional[str] = Field(
+        default=None,
+        validation_alias="NEWS_AUTOPILOT_TEACHER_MODEL",
+    )
+    news_autopilot_template_name: Optional[str] = Field(
+        default=None,
+        validation_alias="NEWS_AUTOPILOT_TEMPLATE_NAME",
+    )
+    news_autopilot_instructions: Optional[str] = Field(
+        default=None,
+        validation_alias="NEWS_AUTOPILOT_INSTRUCTIONS",
+    )
+    news_autopilot_retrain_parameters_json: str = Field(
+        default="{}",
+        validation_alias="NEWS_AUTOPILOT_RETRAIN_PARAMETERS_JSON",
+    )
+    news_autopilot_retrain_timeout_seconds: int = Field(
+        default=1800,
+        ge=60,
+        le=7200,
+        validation_alias="NEWS_AUTOPILOT_RETRAIN_TIMEOUT_SECONDS",
+    )
+    news_autopilot_user_agent: str = Field(
+        default="CrewAI-NewsAutopilot/1.0 (+https://github.com/zeno-b/crewai-ollama-setup)",
+        validation_alias="NEWS_AUTOPILOT_USER_AGENT",
+    )
+
     @field_validator("algorithm")
     @classmethod
     def algorithm_must_be_hs256(cls, v: str) -> str:
@@ -138,6 +238,22 @@ class Settings(BaseSettings):
                     "CORS_ALLOW_ORIGINS must not be '*' in production; list explicit origins."
                 )
         return self
+
+    @field_validator("news_autopilot_output_format")
+    @classmethod
+    def autopilot_format(cls, v: str) -> str:
+        low = v.lower().strip()
+        if low not in ("text", "jsonl"):
+            raise ValueError("NEWS_AUTOPILOT_OUTPUT_FORMAT must be 'text' or 'jsonl'")
+        return low
+
+    @field_validator("news_autopilot_job_type")
+    @classmethod
+    def autopilot_job_type(cls, v: str) -> str:
+        low = v.lower().strip()
+        if low not in ("system_prompt", "distill"):
+            raise ValueError("NEWS_AUTOPILOT_JOB_TYPE must be 'system_prompt' or 'distill'")
+        return low
 
     def cors_origins_list(self) -> List[str]:
         raw = self.cors_allow_origins.strip()

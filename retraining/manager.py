@@ -303,7 +303,20 @@ class RetrainingJobManager:
         if not log_path.exists():
             return []
         lines = await asyncio.to_thread(log_path.read_text, "utf-8")
-        entries = [json.loads(line) for line in lines.splitlines() if line.strip()]
+        entries: List[Dict[str, Any]] = []
+        for line in lines.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed: Any = json.loads(line)
+            except json.JSONDecodeError as exc:
+                logger.warning("Skipping malformed NDJSON log line in %s: %s", log_path, exc)
+                continue
+            if isinstance(parsed, dict):
+                entries.append(parsed)
+            else:
+                entries.append({"raw": parsed})
         if tail > 0:
             entries = entries[-tail:]
         return entries
