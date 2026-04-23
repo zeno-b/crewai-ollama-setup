@@ -101,9 +101,17 @@ class DatasetManager:
 
     def _persist_metadata(self) -> None:
         tmp_path = self.metadata_path.with_suffix(".tmp")
-        with tmp_path.open("w", encoding="utf-8") as f:
-            json.dump(self._metadata, f, indent=2)
-        tmp_path.replace(self.metadata_path)
+        try:
+            with tmp_path.open("w", encoding="utf-8") as f:
+                json.dump(self._metadata, f, indent=2)
+            tmp_path.replace(self.metadata_path)
+        except OSError:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
 
     def save_dataset(
         self,
@@ -130,10 +138,18 @@ class DatasetManager:
                     f"Dataset '{dataset_id}' already exists. Use overwrite flag to replace it."
                 )
 
-            with dataset_path.open("w", encoding="utf-8") as f:
-                f.write(content)
+            try:
+                with dataset_path.open("w", encoding="utf-8") as f:
+                    f.write(content)
+            except OSError as exc:
+                logger.error("Failed to write dataset file %s: %s", dataset_path, exc)
+                raise
 
-            size_bytes = dataset_path.stat().st_size
+            try:
+                size_bytes = dataset_path.stat().st_size
+            except OSError as exc:
+                logger.error("Failed to stat dataset file %s: %s", dataset_path, exc)
+                raise
             timestamp = _utcnow()
             record = {
                 "name": dataset_id,
@@ -148,7 +164,17 @@ class DatasetManager:
             }
 
             self._metadata[dataset_id] = record
-            self._persist_metadata()
+            try:
+                self._persist_metadata()
+            except OSError as exc:
+                logger.error(
+                    "Dataset %s was written but metadata persist failed: %s",
+                    dataset_id,
+                    exc,
+                )
+                raise RuntimeError(
+                    f"Dataset '{dataset_id}' file was saved but metadata could not be updated."
+                ) from exc
 
             return record
 

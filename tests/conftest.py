@@ -28,6 +28,8 @@ os.environ["OLLAMA_BASE_URL"] = os.environ.get("OLLAMA_BASE_URL", "http://127.0.
 os.environ["REDIS_URL"] = os.environ.get("REDIS_URL", "redis://127.0.0.1:9/0")
 os.environ["SECRET_KEY"] = "test-secret-key-for-pytest-only-32chars!!"
 os.environ["API_BEARER_TOKEN"] = "test-api-token"
+os.environ["AUTOPILOT_STATE_DIR"] = os.path.join(_TEST_ROOT, "autopilot")
+os.environ["AUTOPILOT_ENABLED"] = "false"
 
 
 class _FakeOllamaTagsResponse:
@@ -93,6 +95,9 @@ class FakeRedis:
 
     async def get(self, key: str) -> Optional[str]:
         return self._store.get(key)
+
+    async def exists(self, key: str) -> int:
+        return 1 if key in self._store else 0
 
 
 def _fake_redis_from_url(*_args: Any, **_kwargs: Any) -> FakeRedis:
