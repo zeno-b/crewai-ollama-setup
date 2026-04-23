@@ -50,7 +50,8 @@ def test_run_crew_missing_agent_reference_400(client):
         },
     )
     assert r.status_code == 400
-    assert "not found" in r.json()["detail"].lower()
+    detail = r.json()["detail"].lower()
+    assert "missing" in detail and "agent" in detail
 
 
 def test_crew_result_invalid_id_400(client):

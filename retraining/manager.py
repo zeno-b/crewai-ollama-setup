@@ -13,6 +13,18 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+
+class RetrainingClientError(Exception):
+    """Invalid retraining job request with a preferred HTTP status code."""
+
+    __slots__ = ("message", "status_code")
+
+    def __init__(self, message: str, status_code: int = 400) -> None:
+        self.message = message
+        self.status_code = status_code
+        super().__init__(message)
+
+
 _NAME_SANITIZER = re.compile(r"[^a-zA-Z0-9_-]+")
 MAX_DATASET_CHARS = 120_000
 
@@ -303,10 +315,62 @@ class RetrainingJobManager:
         if not log_path.exists():
             return []
         lines = await asyncio.to_thread(log_path.read_text, "utf-8")
-        entries = [json.loads(line) for line in lines.splitlines() if line.strip()]
+        entries: List[Dict[str, Any]] = []
+        for line in lines.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+                if isinstance(parsed, dict):
+                    entries.append(parsed)
+                else:
+                    entries.append(
+                        {
+                            "event": "log_parse_skipped",
+                            "reason": "JSON root was not an object",
+                            "preview": line[:500],
+                        }
+                    )
+            except json.JSONDecodeError as exc:
+                logger.warning("Skipping malformed retraining log line for %s: %s", job_id, exc)
+                entries.append(
+                    {
+                        "event": "log_parse_error",
+                        "reason": f"Invalid JSON on retraining log line: {exc}",
+                        "preview": line[:500],
+                    }
+                )
         if tail > 0:
             entries = entries[-tail:]
         return entries
+
+    def validate_new_job_payload(self, payload: Dict[str, Any]) -> None:
+        """Raise before a job is queued so clients get immediate, specific errors."""
+        template_name = (payload.get("template_name") or "").strip()
+        if template_name:
+            if not self.modelfile_template_dir:
+                raise ValueError(
+                    "template_name was set but MODELFILE_TEMPLATE_DIR is not configured on the server."
+                )
+            self._load_named_template(template_name)
+
+        job_type = (payload.get("job_type") or "system_prompt").lower()
+        if job_type != "distill":
+            return
+
+        teacher = (payload.get("teacher_model") or "").strip()
+        if not teacher:
+            raise RetrainingClientError(
+                "teacher_model is required when job_type is distill.",
+                status_code=422,
+            )
+        has_inline = bool((payload.get("modelfile_template") or "").strip())
+        if not has_inline and not template_name:
+            raise ValueError(
+                "Distillation jobs require modelfile_template or template_name "
+                "(MESSAGE-style Modelfile; see README)."
+            )
 
     def _load_named_template(self, name: str) -> str:
         if not self.modelfile_template_dir:

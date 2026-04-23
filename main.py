@@ -23,7 +23,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_
 from pydantic import BaseModel, Field
 
 from config.settings import settings
-from retraining.manager import DatasetManager, RetrainingJobManager
+from retraining.manager import DatasetManager, RetrainingClientError, RetrainingJobManager
 
 _JOB_ID_PATTERN = re.compile(r"^job_[0-9a-f]{8,64}$", re.IGNORECASE)
 _CREW_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
@@ -62,8 +62,16 @@ async def require_api_token(
     expected = settings.api_bearer_token
     if not expected:
         return
-    if not credentials or credentials.credentials != expected:
-        raise HTTPException(status_code=401, detail="Invalid or missing API bearer token")
+    if not credentials:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Authorization header. Send: Authorization: Bearer <API_BEARER_TOKEN>.",
+        )
+    if credentials.credentials != expected:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid bearer token. The credential did not match API_BEARER_TOKEN.",
+        )
 
 
 def _metrics_authorized(request: Request) -> None:
@@ -71,8 +79,16 @@ def _metrics_authorized(request: Request) -> None:
     if not expected:
         return
     auth = request.headers.get("Authorization", "")
+    if not auth:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Authorization header. Send: Authorization: Bearer <METRICS_BEARER_TOKEN> to access /metrics.",
+        )
     if auth != f"Bearer {expected}":
-        raise HTTPException(status_code=401, detail="Metrics endpoint requires bearer token")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid metrics bearer token. The credential did not match METRICS_BEARER_TOKEN.",
+        )
 
 
 @asynccontextmanager
@@ -295,7 +311,7 @@ async def health_check():
         try:
             await redis_client.ping()
             redis_status = True
-        except OSError as exc:
+        except Exception as exc:  # noqa: BLE001 - health must not fail on unexpected Redis errors
             logger.warning("Redis ping failed during health check: %s", exc)
             redis_status = False
 
@@ -317,20 +333,51 @@ async def metrics_endpoint(request: Request):
 @app.get("/models", response_model=ModelsResponse)
 async def list_models():
     if not settings.ollama_base_url:
-        raise HTTPException(status_code=503, detail="Ollama not configured")
+        raise HTTPException(
+            status_code=503,
+            detail="Ollama is not configured: OLLAMA_BASE_URL is empty. Set OLLAMA_BASE_URL to your Ollama HTTP base (for example http://ollama:11434).",
+        )
     url = f"{settings.ollama_base_url.rstrip('/')}/api/tags"
     try:
         async with httpx.AsyncClient(timeout=min(settings.ollama_timeout, 60)) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             data = resp.json()
+    except httpx.TimeoutException as exc:
+        logger.error("Timeout listing Ollama models at %s: %s", url, exc)
+        raise HTTPException(
+            status_code=504,
+            detail=f"Ollama model list timed out after {min(settings.ollama_timeout, 60)}s while calling {url}.",
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        body_preview = ""
+        if exc.response is not None:
+            try:
+                body_preview = exc.response.text[:500]
+            except OSError:
+                body_preview = ""
+        logger.error("Ollama returned HTTP %s for %s: %s", status, url, exc)
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Ollama model API returned HTTP {status} for GET {url}. "
+                f"Response preview: {body_preview or '(empty body)'}"
+            ),
+        ) from exc
     except httpx.HTTPError as exc:
-        logger.error("Error listing Ollama models: %s", exc)
-        raise HTTPException(status_code=502, detail="Failed to reach Ollama model API") from exc
+        logger.error("Error listing Ollama models at %s: %s", url, exc)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to reach Ollama model API at {url}: {exc!s}",
+        ) from exc
 
     raw_models = data.get("models") if isinstance(data, dict) else None
     if not isinstance(raw_models, list):
-        raise HTTPException(status_code=502, detail="Unexpected response from Ollama")
+        raise HTTPException(
+            status_code=502,
+            detail="Unexpected response from Ollama: top-level JSON must be an object with a 'models' array.",
+        )
 
     models: List[ModelInfo] = []
     for item in raw_models:
@@ -369,7 +416,10 @@ async def create_dataset(dataset: DatasetCreateRequest, _: None = Depends(requir
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
         logger.error("Failed to save dataset: %s", exc)
-        raise HTTPException(status_code=500, detail="Failed to save dataset") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save dataset to disk: {exc!s}",
+        ) from exc
 
 
 @app.get("/datasets", response_model=DatasetListResponse)
@@ -413,11 +463,6 @@ async def create_retraining_job(
 ):
     if not retraining_manager or not dataset_manager:
         raise HTTPException(status_code=503, detail="Retraining components not initialized")
-    if job_request.job_type == "distill" and not (job_request.teacher_model or "").strip():
-        raise HTTPException(
-            status_code=422,
-            detail="teacher_model is required when job_type is distill",
-        )
 
     try:
         await asyncio.to_thread(dataset_manager.get_dataset, job_request.dataset_name, False)
@@ -428,13 +473,26 @@ async def create_retraining_job(
 
     payload = job_request.model_dump()
     try:
+        await asyncio.to_thread(retraining_manager.validate_new_job_payload, payload)
+    except RetrainingClientError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except (ValueError, FileNotFoundError) as exc:
+        code = 404 if isinstance(exc, FileNotFoundError) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+
+    try:
         job_record = await retraining_manager.create_job(payload)
+    except RetrainingClientError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
     except (ValueError, FileNotFoundError) as exc:
         code = 404 if isinstance(exc, FileNotFoundError) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
     except OSError as exc:
         logger.error("Failed to create retraining job: %s", exc)
-        raise HTTPException(status_code=500, detail="Failed to create retraining job") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to persist retraining job metadata: {exc!s}",
+        ) from exc
 
     job_id = job_record["job_id"]
     asyncio.create_task(retraining_manager.run_job(job_id, payload, job_request.timeout))
@@ -454,7 +512,13 @@ async def get_retraining_job(job_id: str):
     if not retraining_manager:
         raise HTTPException(status_code=503, detail="Retraining components not initialized")
     if not _JOB_ID_PATTERN.match(job_id):
-        raise HTTPException(status_code=400, detail="Invalid job id")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid job id: expected 'job_' followed by 8-64 hexadecimal characters "
+                f"(received {job_id!r})."
+            ),
+        )
     try:
         record = await retraining_manager.get_job(job_id)
         return RetrainingJobStatus(**record)
@@ -467,7 +531,13 @@ async def get_retraining_logs(job_id: str, tail: int = Query(100, ge=1, le=10_00
     if not retraining_manager:
         raise HTTPException(status_code=503, detail="Retraining components not initialized")
     if not _JOB_ID_PATTERN.match(job_id):
-        raise HTTPException(status_code=400, detail="Invalid job id")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid job id: expected 'job_' followed by 8-64 hexadecimal characters "
+                f"(received {job_id!r})."
+            ),
+        )
     logs = await retraining_manager.get_logs(job_id, tail)
     return RetrainingJobLogsResponse(job_id=job_id, logs=logs)
 
@@ -475,7 +545,13 @@ async def get_retraining_logs(job_id: str, tail: int = Query(100, ge=1, le=10_00
 @app.post("/create_agent")
 async def create_agent(agent_config: AgentConfig, _: None = Depends(require_api_token)):
     if not ollama_llm:
-        raise HTTPException(status_code=503, detail="Ollama not connected")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Ollama LLM client is not available. Check that OLLAMA_BASE_URL is reachable "
+                f"({settings.ollama_base_url}) and the service logs for connection errors."
+            ),
+        )
     try:
         _agent = Agent(
             role=agent_config.role,
@@ -502,9 +578,12 @@ async def create_agent(agent_config: AgentConfig, _: None = Depends(require_api_
         AGENT_CREATIONS.inc()
         logger.info("Created agent: %s", agent_config.name)
         return {"message": f"Agent {agent_config.name} created successfully"}
-    except OSError as exc:
+    except Exception as exc:  # noqa: BLE001 - surface agent construction failures clearly
         logger.error("Error creating agent: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create agent '{agent_config.name}': {type(exc).__name__}: {exc}",
+        ) from exc
 
 
 @app.post("/run_crew")
@@ -514,7 +593,13 @@ async def run_crew(
     _: None = Depends(require_api_token),
 ):
     if not ollama_llm:
-        raise HTTPException(status_code=503, detail="Ollama not connected")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Ollama LLM client is not available; cannot run a crew. "
+                f"Verify Ollama at {settings.ollama_base_url} and model {settings.ollama_model!r}."
+            ),
+        )
     try:
         agents: Dict[str, Agent] = {}
         for agent_config in crew_config.agents:
@@ -528,7 +613,14 @@ async def run_crew(
         tasks: List[Task] = []
         for task_config in crew_config.tasks:
             if task_config.agent not in agents:
-                raise HTTPException(status_code=400, detail=f"Agent {task_config.agent} not found")
+                known = ", ".join(sorted(agents)) or "(none)"
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Task references unknown agent {task_config.agent!r}. "
+                        f"Defined agent names: {known}."
+                    ),
+                )
             tasks.append(
                 Task(
                     description=task_config.description,
@@ -544,9 +636,12 @@ async def run_crew(
         return {"message": "Crew execution started", "crew_id": crew_id}
     except HTTPException:
         raise
-    except OSError as exc:
+    except Exception as exc:  # noqa: BLE001 - crew wiring can raise varied library errors
         logger.error("Error running crew: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to start crew execution: {type(exc).__name__}: {exc}",
+        ) from exc
 
 
 async def run_crew_async(crew: Crew, crew_config: CrewConfig, crew_id: str):
@@ -555,6 +650,7 @@ async def run_crew_async(crew: Crew, crew_config: CrewConfig, crew_id: str):
         logger.info("Crew execution completed: %s", result)
         if redis_client:
             result_data = {
+                "status": "completed",
                 "config": crew_config.model_dump(),
                 "result": str(result),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
@@ -564,8 +660,23 @@ async def run_crew_async(crew: Crew, crew_config: CrewConfig, crew_id: str):
                 json.dumps(result_data),
                 ex=settings.result_ttl,
             )
-    except OSError as exc:
-        logger.error("Error in crew execution: %s", exc)
+    except Exception as exc:  # noqa: BLE001 - background task must record any kickoff failure
+        logger.exception("Crew execution failed for %s", crew_id)
+        if redis_client:
+            error_payload = {
+                "status": "failed",
+                "config": crew_config.model_dump(),
+                "error": f"{type(exc).__name__}: {exc}",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            try:
+                await redis_client.set(
+                    f"crew_result:{crew_id}",
+                    json.dumps(error_payload),
+                    ex=settings.result_ttl,
+                )
+            except OSError as redis_exc:
+                logger.error("Failed to store crew failure in Redis: %s", redis_exc)
 
 
 @app.get("/crew_results/{crew_id}")
@@ -573,11 +684,24 @@ async def get_crew_result(crew_id: str):
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis not available")
     if not _CREW_ID_PATTERN.match(crew_id):
-        raise HTTPException(status_code=400, detail="Invalid crew id")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid crew id: use only letters, digits, underscore, or hyphen, "
+                f"1-128 characters (received length {len(crew_id)})."
+            ),
+        )
     try:
         result = await redis_client.get(f"crew_result:{crew_id}")
         if not result:
-            raise HTTPException(status_code=404, detail="Crew result not found")
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No crew result found for id {crew_id!r}. "
+                    "The job may still be running, may have failed before writing a result, "
+                    "or the id may be wrong / expired (see RESULT_TTL)."
+                ),
+            )
         return json.loads(result)
     except HTTPException:
         raise

@@ -48,6 +48,41 @@ def test_retraining_missing_dataset_404(client):
     assert r.status_code == 404
 
 
+def test_retraining_distill_requires_teacher_422(client):
+    _sample_dataset(client)
+    r = client.post(
+        "/retraining/jobs",
+        json={
+            "model_name": "m",
+            "base_model": "llama2:7b",
+            "dataset_name": "rt-sample",
+            "job_type": "distill",
+            "modelfile_template": "FROM {{BASE_MODEL}}\nMESSAGE user hi\n",
+            "timeout": 120,
+        },
+    )
+    assert r.status_code == 422
+    assert "teacher_model" in r.json()["detail"].lower()
+
+
+def test_retraining_distill_requires_template_400(client):
+    _sample_dataset(client)
+    r = client.post(
+        "/retraining/jobs",
+        json={
+            "model_name": "m",
+            "base_model": "llama2:7b",
+            "dataset_name": "rt-sample",
+            "job_type": "distill",
+            "teacher_model": "teacher:latest",
+            "timeout": 120,
+        },
+    )
+    assert r.status_code == 400
+    detail = r.json()["detail"].lower()
+    assert "modelfile_template" in detail or "template_name" in detail
+
+
 def test_retraining_timeout_validation_422(client):
     _sample_dataset(client)
     r = client.post(
