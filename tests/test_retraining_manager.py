@@ -48,7 +48,7 @@ def test_modelfile_rejects_oversized_default_template(dataset_dir: Path):
         "parameters": {},
     }
     with pytest.raises(ValueError, match="too large"):
-        mgr._render_modelfile(payload, huge)
+        mgr._render_modelfile(payload, {"content": huge, "format": "text"})
 
 
 @pytest.mark.asyncio

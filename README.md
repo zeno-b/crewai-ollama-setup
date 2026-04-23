@@ -209,6 +209,13 @@ crewai-ollama-setup/
 | `GUNICORN_EXTRA` | Additional flags appended to the Gunicorn command | *(empty)* |
 | `DATASET_DIR` | Filesystem path for retraining datasets | `data/datasets` |
 | `RETRAINING_DIR` | Filesystem path for retraining job artifacts | `data/retraining` |
+| `SECRET_KEY` | Signing / session secret (min 32 chars; random in dev if unset) | *(random per process in dev)* |
+| `API_BEARER_TOKEN` | If set, required on `POST`/`DELETE` mutating routes (datasets, retraining, agents, crews) | *(unset)* |
+| `METRICS_BEARER_TOKEN` | If set, required for `GET /metrics` | *(unset)* |
+| `CORS_ALLOW_ORIGINS` | Comma-separated browser origins, or `*` (blocked when `ENVIRONMENT=production`) | `http://localhost:3000,...` |
+| `DATASET_MAX_CONTENT_BYTES` | Max raw bytes per dataset upload | `5242880` |
+| `MODELFILE_TEMPLATE_DIR` | Directory of `<name>.template` files for `template_name` on jobs | `config/modelfiles` |
+| `REDIS_PASSWORD` | Optional; injected into `REDIS_URL` when host has no credentials | *(unset)* |
 
 ### Performance Tuning
 
@@ -239,9 +246,12 @@ Grafana provides a pre-built **CrewAI Overview** dashboard and connects automati
 
 ### Manage Datasets
 
+When `API_BEARER_TOKEN` is set (recommended outside local dev), send `Authorization: Bearer <token>` on mutating requests.
+
 - Upload or replace a dataset:
   ```bash
   curl -X POST http://localhost:8000/datasets \
+       -H "Authorization: Bearer ${API_BEARER_TOKEN}" \
        -H "Content-Type: application/json" \
        -d '{
              "name": "domain_faq",
@@ -253,18 +263,23 @@ Grafana provides a pre-built **CrewAI Overview** dashboard and connects automati
   ```
 - List datasets: `curl http://localhost:8000/datasets`
 - Inspect a dataset (with content): `curl "http://localhost:8000/datasets/domain_faq?include_content=true"`
-- Remove a dataset: `curl -X DELETE http://localhost:8000/datasets/domain_faq`
+- Remove a dataset: `curl -X DELETE -H "Authorization: Bearer ${API_BEARER_TOKEN}" http://localhost:8000/datasets/domain_faq`
 
 ### Launch Retraining
+
+- **System prompt style** (`job_type` defaults to `system_prompt`): embeds dataset text in a `SYSTEM` block. Optional `modelfile_template` with placeholders: `{{DATASET}}`, `{{BASE_MODEL}}`, `{{MODEL_NAME}}`, `{{TEACHER_MODEL}}`, `{{INSTRUCTIONS}}`, `{{ADAPTER}}`.
+- **Distillation-oriented** (`job_type`: `distill`): set `teacher_model` to the Ollama teacher name and supply `modelfile_template` or `template_name` (files under `MODELFILE_TEMPLATE_DIR`, e.g. `example_distill`). For `format: jsonl`, each line can be `{"role":"user","content":"..."} / {"role":"assistant","content":"..."}`; the service expands them to `MESSAGE user` / `MESSAGE assistant` lines for the Modelfile. You still define how the teacher is invoked inside your template (Ollama `TEMPLATE` / `MESSAGE` patterns).
 
 - Kick off a job (accepts an optional `modelfile_template` with `{{DATASET}}` placeholder):
   ```bash
   curl -X POST http://localhost:8000/retraining/jobs \
+       -H "Authorization: Bearer ${API_BEARER_TOKEN}" \
        -H "Content-Type: application/json" \
        -d '{
              "model_name": "domain-faq:latest",
              "base_model": "llama2:7b",
              "dataset_name": "domain_faq",
+             "job_type": "system_prompt",
              "instructions": "Prioritize answers sourced from the inlined dataset.",
              "parameters": {"temperature": 0.2},
              "stream": true
@@ -274,7 +289,11 @@ Grafana provides a pre-built **CrewAI Overview** dashboard and connects automati
 - Inspect a specific job: `curl http://localhost:8000/retraining/jobs/<job_id>`
 - Tail logs: `curl http://localhost:8000/retraining/jobs/<job_id>/logs?tail=50`
 
-> The default retraining template embeds dataset content into the Modelfile `SYSTEM` prompt (limited to ~120k characters). For larger corpora, provide a custom `modelfile_template` that references external artifacts and include `{{DATASET}}` where you want the dataset injected.
+> The default retraining template embeds dataset content into the Modelfile `SYSTEM` prompt (limited to ~120k characters). For larger corpora, provide a custom `modelfile_template` that references external artifacts and include `{{DATASET}}` where you want the dataset injected. Docker Compose requires `SECRET_KEY` in `.env` (see `.env.example`).
+
+### Models API
+
+`GET /models` calls Ollama’s `GET /api/tags` on `OLLAMA_BASE_URL` and returns the live catalog (no hard-coded placeholder list).
 
 ## Development
 
