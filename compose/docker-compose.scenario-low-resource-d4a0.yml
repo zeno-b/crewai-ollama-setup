@@ -1,0 +1,35 @@
+# Scenario 4: smaller CPU/memory limits for laptops or small VMs.
+
+include:
+  - path: ../docker-compose.yml
+
+services:
+  ollama:
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+        reservations:
+          memory: 1G
+          cpus: "0.5"
+
+  crewai:
+    environment:
+      - AUTOPILOT_ENABLED=${AUTOPILOT_ENABLED:-false}
+      - AUTOPILOT_STATE_DIR=/app/data/autopilot
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.75"
+        reservations:
+          memory: 512M
+          cpus: "0.25"
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"

@@ -1,0 +1,20 @@
+# Scenario 3: ingest + autonomous finetune when enough new items arrive (cooldown respected).
+# Override thresholds with env vars as needed.
+
+include:
+  - path: ../docker-compose.yml
+
+services:
+  crewai:
+    environment:
+      - AUTOPILOT_ENABLED=true
+      - AUTOPILOT_NEWS_FEEDS=${AUTOPILOT_NEWS_FEEDS:-https://hnrss.org/frontpage}
+      - AUTOPILOT_AUTO_FINETUNE=true
+      - AUTOPILOT_MIN_NEW_ITEMS_TO_FINETUNE=${AUTOPILOT_MIN_NEW_ITEMS_TO_FINETUNE:-8}
+      - AUTOPILOT_FINETUNE_COOLDOWN_SECONDS=${AUTOPILOT_FINETUNE_COOLDOWN_SECONDS:-7200}
+      - AUTOPILOT_POLL_INTERVAL_SECONDS=${AUTOPILOT_POLL_INTERVAL_SECONDS:-900}
+      - AUTOPILOT_BASE_MODEL=${AUTOPILOT_BASE_MODEL:-llama2:7b}
+      - AUTOPILOT_OUTPUT_MODEL_TEMPLATE=${AUTOPILOT_OUTPUT_MODEL_TEMPLATE:-crew-news-{date}-{time}}
+      - AUTOPILOT_JOB_TIMEOUT_SECONDS=${AUTOPILOT_JOB_TIMEOUT_SECONDS:-3600}
+      - AUTOPILOT_STATE_DIR=/app/data/autopilot
+      - AUTOPILOT_DATASET_NAME=${AUTOPILOT_DATASET_NAME:-news-rolling}

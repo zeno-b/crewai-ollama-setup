@@ -1,0 +1,17 @@
+# Scenario 5: core stack + Prometheus/Grafana (monitoring profile).
+
+include:
+  - path: ../docker-compose.yml
+
+services:
+  crewai:
+    environment:
+      - ENABLE_METRICS=true
+      - AUTOPILOT_ENABLED=${AUTOPILOT_ENABLED:-false}
+      - AUTOPILOT_STATE_DIR=/app/data/autopilot
+
+  prometheus:
+    profiles: []
+
+  grafana:
+    profiles: []

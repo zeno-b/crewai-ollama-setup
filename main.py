@@ -23,6 +23,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_
 from pydantic import BaseModel, Field
 
 from config.settings import settings
+from retraining.autopilot import AutopilotStatusStore, FingerprintStore, RetrainingAutopilot
 from retraining.manager import DatasetManager, RetrainingClientError, RetrainingJobManager
 
 _JOB_ID_PATTERN = re.compile(r"^job_[0-9a-f]{8,64}$", re.IGNORECASE)
@@ -52,6 +53,7 @@ redis_client: Optional[redis.Redis] = None
 ollama_llm: Optional[Ollama] = None
 dataset_manager: Optional[DatasetManager] = None
 retraining_manager: Optional[RetrainingJobManager] = None
+autopilot: Optional[RetrainingAutopilot] = None
 
 optional_bearer = HTTPBearer(auto_error=False)
 
@@ -93,7 +95,7 @@ def _metrics_authorized(request: Request) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global redis_client, ollama_llm, dataset_manager, retraining_manager
+    global redis_client, ollama_llm, dataset_manager, retraining_manager, autopilot
 
     logger.info("Starting CrewAI service...")
 
@@ -133,9 +135,33 @@ async def lifespan(app: FastAPI):
         modelfile_template_dir=template_dir if template_dir.is_dir() else None,
     )
 
+    state_dir = Path(settings.autopilot_state_dir)
+    if not state_dir.is_absolute():
+        state_dir = Path(__file__).resolve().parent / state_dir
+    state_dir.mkdir(parents=True, exist_ok=True)
+    fp_store = FingerprintStore(state_dir / "fingerprints.json", redis=redis_client)
+    ap_status = AutopilotStatusStore(state_dir / "status.json")
+    autopilot = RetrainingAutopilot(
+        settings=settings,
+        dataset_manager=dataset_manager,
+        job_manager=retraining_manager,
+        fingerprint_store=fp_store,
+        status_store=ap_status,
+    )
+    if settings.autopilot_enabled:
+        autopilot.start_background()
+        logger.info(
+            "Retraining autopilot enabled (poll every %ss, feeds configured: %s)",
+            settings.autopilot_poll_interval_seconds,
+            bool(settings.autopilot_news_feeds.strip()),
+        )
+
     yield
 
     logger.info("Shutting down CrewAI service...")
+    if autopilot:
+        await autopilot.stop()
+        autopilot = None
     if redis_client:
         await redis_client.close()
 
@@ -303,6 +329,17 @@ class RetrainingJobLogsResponse(BaseModel):
     logs: List[Dict[str, Any]]
 
 
+class AutopilotStatusResponse(BaseModel):
+    enabled: bool
+    configured: bool
+    state: Dict[str, Any]
+    settings_summary: Dict[str, Any]
+
+
+class AutopilotRunResponse(BaseModel):
+    result: Dict[str, Any]
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     ollama_status = ollama_llm is not None
@@ -414,6 +451,9 @@ async def create_dataset(dataset: DatasetCreateRequest, _: None = Depends(requir
         return DatasetInfo(**record)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        logger.error("Dataset save incomplete: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     except OSError as exc:
         logger.error("Failed to save dataset: %s", exc)
         raise HTTPException(
@@ -540,6 +580,44 @@ async def get_retraining_logs(job_id: str, tail: int = Query(100, ge=1, le=10_00
         )
     logs = await retraining_manager.get_logs(job_id, tail)
     return RetrainingJobLogsResponse(job_id=job_id, logs=logs)
+
+
+@app.get("/retraining/autopilot/status", response_model=AutopilotStatusResponse)
+async def autopilot_status():
+    if not autopilot:
+        raise HTTPException(status_code=503, detail="Autopilot not initialized")
+    feeds = [f.strip() for f in settings.autopilot_news_feeds.split(",") if f.strip()]
+    return AutopilotStatusResponse(
+        enabled=settings.autopilot_enabled,
+        configured=bool(feeds),
+        state=autopilot.status.read_dict(),
+        settings_summary={
+            "poll_interval_seconds": settings.autopilot_poll_interval_seconds,
+            "max_items_per_feed": settings.autopilot_max_items_per_feed,
+            "dataset_name": settings.autopilot_dataset_name,
+            "auto_finetune": settings.autopilot_auto_finetune,
+            "min_new_items_to_finetune": settings.autopilot_min_new_items_to_finetune,
+            "finetune_cooldown_seconds": settings.autopilot_finetune_cooldown_seconds,
+            "base_model": settings.autopilot_base_model,
+            "output_model_template": settings.autopilot_output_model_template,
+        },
+    )
+
+
+@app.post("/retraining/autopilot/run", response_model=AutopilotRunResponse)
+async def autopilot_run_now(_: None = Depends(require_api_token)):
+    """Trigger one ingest + optional finetune cycle (for operators or cron sidecars)."""
+    if not autopilot:
+        raise HTTPException(status_code=503, detail="Autopilot not initialized")
+    try:
+        result = await autopilot.run_cycle()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Manual autopilot run failed: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Autopilot run failed: {type(exc).__name__}: {exc}",
+        ) from exc
+    return AutopilotRunResponse(result=result)
 
 
 @app.post("/create_agent")

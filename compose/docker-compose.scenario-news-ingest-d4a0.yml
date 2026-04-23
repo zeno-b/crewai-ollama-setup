@@ -1,0 +1,16 @@
+# Scenario 2: ingest RSS/Atom into rolling dataset; no automatic Ollama finetune.
+# Tune feeds and poll interval via environment.
+
+include:
+  - path: ../docker-compose.yml
+
+services:
+  crewai:
+    environment:
+      - AUTOPILOT_ENABLED=true
+      - AUTOPILOT_NEWS_FEEDS=${AUTOPILOT_NEWS_FEEDS:-https://hnrss.org/frontpage}
+      - AUTOPILOT_AUTO_FINETUNE=false
+      - AUTOPILOT_POLL_INTERVAL_SECONDS=${AUTOPILOT_POLL_INTERVAL_SECONDS:-600}
+      - AUTOPILOT_DATASET_NAME=${AUTOPILOT_DATASET_NAME:-news-rolling}
+      - AUTOPILOT_STATE_DIR=/app/data/autopilot
+      - AUTOPILOT_MAX_ITEMS_PER_FEED=${AUTOPILOT_MAX_ITEMS_PER_FEED:-30}

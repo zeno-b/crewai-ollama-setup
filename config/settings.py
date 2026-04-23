@@ -110,6 +110,96 @@ class Settings(BaseSettings):
         description="Directory of reusable Modelfile templates (optional).",
     )
 
+    # Autopilot: RSS/Atom news -> rolling dataset -> optional autonomous Ollama finetune
+    autopilot_enabled: bool = Field(default=False, validation_alias="AUTOPILOT_ENABLED")
+    autopilot_news_feeds: str = Field(
+        default="",
+        validation_alias="AUTOPILOT_NEWS_FEEDS",
+        description="Comma-separated RSS or Atom feed URLs.",
+    )
+    autopilot_poll_interval_seconds: int = Field(
+        default=900,
+        ge=30,
+        le=86400,
+        validation_alias="AUTOPILOT_POLL_INTERVAL_SECONDS",
+    )
+    autopilot_max_items_per_feed: int = Field(
+        default=25,
+        ge=1,
+        le=500,
+        validation_alias="AUTOPILOT_MAX_ITEMS_PER_FEED",
+    )
+    autopilot_http_timeout_seconds: int = Field(
+        default=45,
+        ge=5,
+        le=600,
+        validation_alias="AUTOPILOT_HTTP_TIMEOUT_SECONDS",
+    )
+    autopilot_max_feed_bytes: int = Field(
+        default=8_388_608,
+        ge=65536,
+        le=50_000_000,
+        validation_alias="AUTOPILOT_MAX_FEED_BYTES",
+    )
+    autopilot_dataset_name: str = Field(
+        default="news-rolling",
+        validation_alias="AUTOPILOT_DATASET_NAME",
+    )
+    autopilot_state_dir: str = Field(
+        default="data/autopilot",
+        validation_alias="AUTOPILOT_STATE_DIR",
+        description="Fingerprints, last finetune time, and status JSON.",
+    )
+    autopilot_auto_finetune: bool = Field(
+        default=False,
+        validation_alias="AUTOPILOT_AUTO_FINETUNE",
+        description="When true, queue Ollama create after enough new items (see thresholds).",
+    )
+    autopilot_min_new_items_to_finetune: int = Field(
+        default=5,
+        ge=1,
+        le=10_000,
+        validation_alias="AUTOPILOT_MIN_NEW_ITEMS_TO_FINETUNE",
+    )
+    autopilot_finetune_cooldown_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=604800,
+        validation_alias="AUTOPILOT_FINETUNE_COOLDOWN_SECONDS",
+    )
+    autopilot_base_model: str = Field(
+        default="llama2:7b",
+        validation_alias="AUTOPILOT_BASE_MODEL",
+    )
+    autopilot_output_model_template: str = Field(
+        default="crew-news-{date}-{time}",
+        validation_alias="AUTOPILOT_OUTPUT_MODEL_TEMPLATE",
+        description="Python format keys: {date}, {time}, {ts}.",
+    )
+    autopilot_system_instructions: str = Field(
+        default="Summarize and reason about recent news accurately; cite themes from the corpus.",
+        validation_alias="AUTOPILOT_SYSTEM_INSTRUCTIONS",
+    )
+    autopilot_job_timeout_seconds: int = Field(
+        default=1800,
+        ge=60,
+        le=7200,
+        validation_alias="AUTOPILOT_JOB_TIMEOUT_SECONDS",
+    )
+    autopilot_fingerprint_max_entries: int = Field(
+        default=50_000,
+        ge=100,
+        le=5_000_000,
+        validation_alias="AUTOPILOT_FINGERPRINT_MAX_ENTRIES",
+    )
+    autopilot_fingerprint_ttl_seconds: int = Field(
+        default=2_592_000,
+        ge=0,
+        le=31_536_000,
+        validation_alias="AUTOPILOT_FINGERPRINT_TTL_SECONDS",
+        description="0 disables TTL pruning for the on-disk fingerprint map.",
+    )
+
     @field_validator("algorithm")
     @classmethod
     def algorithm_must_be_hs256(cls, v: str) -> str:

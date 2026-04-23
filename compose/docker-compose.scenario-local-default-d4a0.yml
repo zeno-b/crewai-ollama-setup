@@ -1,0 +1,16 @@
+# Scenario 1: local default stack (core only, autopilot off).
+# Usage from repo root:
+#   docker compose -f compose/docker-compose.scenario-local-default-d4a0.yml up -d
+#
+# Requires: .env with SECRET_KEY (and optional API_BEARER_TOKEN).
+
+include:
+  - path: ../docker-compose.yml
+
+services:
+  crewai:
+    environment:
+      - AUTOPILOT_ENABLED=false
+      - AUTOPILOT_NEWS_FEEDS=
+      - AUTOPILOT_AUTO_FINETUNE=false
+      - AUTOPILOT_STATE_DIR=/app/data/autopilot

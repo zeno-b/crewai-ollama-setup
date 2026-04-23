@@ -1,0 +1,21 @@
+# Scenario 6: staging — faster poll and lower finetune threshold for integration tests.
+# Not for production: reduces cooldown and minimum items.
+
+include:
+  - path: ../docker-compose.yml
+
+services:
+  crewai:
+    environment:
+      - ENVIRONMENT=staging
+      - AUTOPILOT_ENABLED=true
+      - AUTOPILOT_NEWS_FEEDS=${AUTOPILOT_NEWS_FEEDS:-https://hnrss.org/newest?count=50}
+      - AUTOPILOT_AUTO_FINETUNE=true
+      - AUTOPILOT_POLL_INTERVAL_SECONDS=120
+      - AUTOPILOT_MIN_NEW_ITEMS_TO_FINETUNE=3
+      - AUTOPILOT_FINETUNE_COOLDOWN_SECONDS=600
+      - AUTOPILOT_MAX_ITEMS_PER_FEED=15
+      - AUTOPILOT_HTTP_TIMEOUT_SECONDS=30
+      - AUTOPILOT_BASE_MODEL=${AUTOPILOT_BASE_MODEL:-llama2:7b}
+      - AUTOPILOT_STATE_DIR=/app/data/autopilot
+      - AUTOPILOT_DATASET_NAME=news-staging
