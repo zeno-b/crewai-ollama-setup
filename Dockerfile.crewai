@@ -1,5 +1,5 @@
 # Multi-stage build for better optimization
-FROM python:3.11-slim as base
+FROM python:3.11-slim AS base
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -20,14 +20,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /app
 
+# Resolve-only check: same base image and pip as development/production.
+# Run locally: docker build -f Dockerfile.crewai --target requirements-verify .
+FROM base AS requirements-verify
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Run pytest in the same image stack as the service (no host Python).
+FROM base AS tests
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY main.py .
+COPY config/ ./config/
+COPY agents/ ./agents/
+COPY retraining/ ./retraining/
+COPY pytest.ini .
+COPY tests/ ./tests/
+ENV ENVIRONMENT=testing \
+    DATASET_DIR=/tmp/crewai-test-datasets \
+    RETRAINING_DIR=/tmp/crewai-test-retraining \
+    OLLAMA_BASE_URL=http://127.0.0.1:9 \
+    REDIS_URL=redis://127.0.0.1:9/0
+RUN pytest tests/ -v --tb=short
+
 # Development stage
-FROM base as development
+FROM base AS development
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir debugpy
 COPY main.py .
 COPY config/ ./config/
 COPY agents/ ./agents/
+COPY retraining/ ./retraining/
 COPY scripts/ ./scripts/
 RUN mkdir -p /app/data /app/logs /app/tmp && \
     chown -R crewai:crewai /app && \
@@ -37,13 +61,14 @@ EXPOSE 8000 5678
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 # Production stage
-FROM base as production
+FROM base AS production
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir gunicorn
 COPY main.py .
 COPY config/ ./config/
 COPY agents/ ./agents/
+COPY retraining/ ./retraining/
 COPY scripts/ ./scripts/
 RUN mkdir -p /app/data /app/logs /app/tmp && \
     chown -R crewai:crewai /app && \

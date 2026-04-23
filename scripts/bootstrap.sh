@@ -21,6 +21,7 @@ fi
 
 NON_INTERACTIVE=0
 INSTALL_OLLAMA_CLI=0
+VERIFY_REQUIREMENTS=0
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama2:7b}"
 
 usage() {
@@ -33,6 +34,8 @@ runtime directories are prepared. By default the script runs interactively.
 Options:
   --non-interactive        Run without interactive prompts (assumes "yes").
   --with-ollama-cli        Install the Ollama CLI on the host in addition to Docker service.
+  --verify-requirements    After Docker is available, run pip install -r requirements.txt inside
+                           the same base image as Dockerfile.crewai (catches pin conflicts early).
   --ollama-model <name>    Default model to pre-pull inside the Ollama container (default: llama2:7b).
   -h, --help               Show this help message.
 EOF
@@ -46,6 +49,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --with-ollama-cli)
       INSTALL_OLLAMA_CLI=1
+      shift
+      ;;
+    --verify-requirements)
+      VERIFY_REQUIREMENTS=1
       shift
       ;;
     --ollama-model)
@@ -271,8 +278,17 @@ ensure_ollama_cli() {
   echo "Ollama CLI installation complete."
 }
 
+verify_requirements_in_container() {
+  echo "Verifying requirements.txt resolves (Dockerfile.crewai target requirements-verify)..."
+  docker build -f "${REPO_ROOT}/Dockerfile.crewai" --target requirements-verify "${REPO_ROOT}"
+}
+
 ensure_compose_services() {
   resolve_compose_command
+
+  if [[ $VERIFY_REQUIREMENTS -eq 1 ]]; then
+    verify_requirements_in_container
+  fi
 
   echo "Pulling required Docker images (Ollama only for now)..."
   "${compose_cmd[@]}" -f "${REPO_ROOT}/docker-compose.yml" pull ollama

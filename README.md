@@ -42,15 +42,40 @@ git clone <repository-url>
 cd crewai-ollama-setup
 ```
 
-2. Start the services:
+2. (Optional) Confirm `requirements.txt` resolves in the same image stack as the CrewAI container (no host Python needed):
+
+```bash
+./scripts/verify-requirements.sh
+```
+
+3. Start the services:
 ```bash
 docker-compose up -d
 ```
 
-3. Verify Ollama is running:
+4. Verify Ollama is running:
 ```bash
 curl http://localhost:11434/api/tags
 ```
+
+### Testing
+
+Run the suite on the host (Python 3.11+ recommended to match the container):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pytest tests/ -v
+```
+
+Run the same tests **inside** the `python:3.11-slim` image used by the service (fully containerized):
+
+```bash
+./scripts/run-tests-docker.sh
+```
+
+Performance smoke checks are marked `@pytest.mark.performance`; security checks use `@pytest.mark.security`. Skip performance tests with `pytest tests/ -m "not performance"`.
 
 ### Configuration
 
